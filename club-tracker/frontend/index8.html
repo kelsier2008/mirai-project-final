@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>Corporate Clean</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f8fafc; color: #334155; padding: 2rem; display: flex; justify-content: center; }
+  .wrap { max-width: 850px; width: 100%; }
+  header { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 1rem 1.5rem; display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+  .brand { font-weight: 700; color: #0f172a; }
+  .tabs { display: flex; gap: .5rem; margin-bottom: 1.5rem; }
+  .tabs button { background: #ffffff; border: 1px solid #cbd5e1; padding: .5rem 1rem; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: .85rem; color: #475569; }
+  .tabs button.active { background: #059669; color: #ffffff; border-color: #059669; }
+  .card { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 1.5rem; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  h3 { margin-top: 0; color: #0f172a; }
+  .badge { background: #d1fae5; color: #065f46; padding: 2px 8px; border-radius: 99px; font-size: .75rem; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">🏢 Enterprise Club Hub</div>
+      <div style="font-size: .85rem; background:#f1f5f9; padding:.3rem .6rem; border-radius:4px;">Admin Portal</div>
+    </header>
+    <div class="tabs">
+      <button class="active" onclick="switchView('Directory', this)">Directory</button>
+      <button onclick="switchView('Attendance', this)">Attendance Logs</button>
+      <button onclick="switchView('Analytics', this)">Analytics</button>
+    </div>
+    <div class="card" id="pane">
+      <h3>Active Clubs Overview</h3>
+      <p style="font-size: .9rem; color: #64748b;">Manage memberships, verify capacity limits, and review status tags.</p>
+      <div style="margin-top: 1rem; display:flex; justify-content:space-between; align-items:center; padding:.75rem; background:#f8fafc; border-radius:6px; border:1px solid #e2e8f0;">
+        <strong>AI Research Group</strong>
+        <span class="badge">Active</span>
+      </div>
+    </div>
+  </div>
+<script>
+  function switchView(name, btn) {
+    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('pane').innerHTML = `<h3>${name} Module</h3><p style="font-size:.9rem; color:#64748b;">Loaded enterprise view for ${name}.</p>`;
+  }
+</script>
+</body>
+</html>

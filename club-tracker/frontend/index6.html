@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>Soft Neumorphic</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #e0e5ec; color: #44475a; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 2rem; }
+  .wrap { max-width: 700px; width: 100%; }
+  .neu-card { background: #e0e5ec; border-radius: 20px; box-shadow: 9px 9px 16px #a3b1c6, -9px -9px 16px #ffffff; padding: 2rem; margin-bottom: 2rem; }
+  .nav { display: flex; gap: 1rem; margin-bottom: 2rem; }
+  .neu-btn { background: #e0e5ec; border: none; padding: .6rem 1.2rem; border-radius: 12px; cursor: pointer; font-weight: 600; color: #656875; box-shadow: 5px 5px 10px #a3b1c6, -5px -5px 10px #ffffff; transition: 0.1s; }
+  .neu-btn:active, .neu-btn.active { box-shadow: inset 3px 3px 6px #a3b1c6, inset -3px -3px 6px #ffffff; color: #ff6f61; }
+  h2 { margin-top: 0; color: #2d3142; }
+  .btn-action { background: #ff6f61; color: white; border: none; padding: .6rem 1.2rem; border-radius: 10px; font-weight: 600; cursor: pointer; box-shadow: 4px 4px 8px #d1d5db, -4px -4px 8px #ffffff; margin-top: 1rem; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav">
+      <button class="neu-btn active" onclick="goTab('Clubs', this)">Clubs</button>
+      <button class="neu-btn" onclick="goTab('Check-in', this)">Check-in</button>
+      <button class="neu-btn" onclick="goTab('Certs', this)">Certs</button>
+    </div>
+    <div class="neu-card" id="card-box">
+      <h2>Interactive Neumorphic Club</h2>
+      <p style="color: #656875;">A tactile, soft UI element layout designed for high user engagement.</p>
+      <button class="btn-action" onclick="alert('Pressed!')">Register Now</button>
+    </div>
+  </div>
+<script>
+  function goTab(name, el) {
+    document.querySelectorAll('.neu-btn').forEach(b => b.classList.remove('active'));
+    el.classList.add('active');
+    document.getElementById('card-box').innerHTML = `<h2>${name} Panel</h2><p style="color: #656875;">Soft UI view updated for ${name}.</p>`;
+  }
+</script>
+</body>
+</html>

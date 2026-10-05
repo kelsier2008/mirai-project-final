@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Club Tracker - Cyber Dark</title>
+<style>
+  :root {
+    --bg: #05050a;
+    --card: #0e1118;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --neon: #00f2fe;
+    --border: #1e293b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: ui-monospace, monospace;
+    background: var(--bg); color: var(--text);
+    padding: 2rem; display: flex; justify-content: center;
+  }
+  .container { max-width: 900px; width: 100%; }
+  header {
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 2rem;
+  }
+  .brand { font-weight: 700; font-size: 1.2rem; color: var(--neon); letter-spacing: 1px; }
+  .nav-bar { display: flex; gap: 1rem; margin-bottom: 1.5rem; }
+  .cyber-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    padding: .5rem 1rem; cursor: pointer; font-family: inherit; font-size: .85rem;
+    transition: all 0.2s;
+  }
+  .cyber-btn.active { border-color: var(--neon); color: var(--neon); box-shadow: 0 0 10px rgba(0,242,254,0.1); }
+  .card {
+    background: var(--card); border: 1px solid var(--border); padding: 1.5rem;
+    position: relative;
+  }
+  .card::before {
+    content: ''; position: absolute; top: 0; left: 0; width: 2px; height: 100%; background: var(--neon);
+  }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: .85rem; }
+  th, td { text-align: left; padding: .6rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">&gt; CLUB_TRACKER_SYS_v2.6</div>
+      <div style="color: var(--muted); font-size: .8rem;">ROLE: SUPER_ADMIN</div>
+    </header>
+
+    <div class="nav-bar">
+      <button class="cyber-btn active" onclick="switchTab('Dashboard', this)">[Dashboard]</button>
+      <button class="cyber-btn" onclick="switchTab('Clubs', this)">[Clubs]</button>
+      <button class="cyber-btn" onclick="switchTab('Logs', this)">[Live_Logs]</button>
+    </div>
+
+    <div class="card" id="content-box">
+      <h3 style="margin-top:0; color: var(--neon);">System Metrics</h3>
+      <table>
+        <tr><th>METRIC</th><th>STATUS</th><th>VAL</th></tr>
+        <tr><td>Active Sessions</td><td>ONLINE</td><td>14</td></tr>
+        <tr><td>Database Health</td><td>STABLE</td><td>99.9%</td></tr>
+      </table>
+    </div>
+  </div>
+<script>
+  function switchTab(name, btn) {
+    document.querySelectorAll('.cyber-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('content-box').innerHTML = `
+      <h3 style="margin-top:0; color: var(--neon);">${name} Module</h3>
+      <p style="color: var(--muted);">Data stream initialized for ${name}.</p>
+    `;
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>Nordic Minimalist</title>
+<style>
+  body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fbfbfa; color: #111; padding: 2.5rem; display: flex; justify-content: center; }
+  .wrap { max-width: 760px; width: 100%; }
+  header { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid #e5e5df; padding-bottom: 1rem; margin-bottom: 2rem; }
+  .brand { font-weight: 600; font-size: 1.1rem; letter-spacing: -0.5px; }
+  .nav { display: flex; gap: 1.5rem; font-size: 0.9rem; }
+  .nav button { background: none; border: none; cursor: pointer; color: #666; padding: 0; font: inherit; }
+  .nav button.active { color: #111; font-weight: 600; border-bottom: 1.5px solid #111; }
+  .card { background: #fff; border: 1px solid #e5e5df; border-radius: 6px; padding: 2rem; box-shadow: 0 1px 2px rgba(0,0,0,0.01); }
+  h2 { margin-top: 0; font-weight: 500; font-size: 1.25rem; }
+  button.action { background: #111; color: #fff; border: none; padding: .5rem 1rem; border-radius: 4px; cursor: pointer; font-size: .85rem; margin-top: 1rem; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">Club Directory</div>
+      <div class="nav">
+        <button class="active" onclick="tab('Clubs', this)">Clubs</button>
+        <button onclick="tab('Schedule', this)">Schedule</button>
+        <button onclick="tab('Profile', this)">Profile</button>
+      </div>
+    </header>
+    <div class="card" id="box">
+      <h2>Active Student Clubs</h2>
+      <p style="color: #666; font-size: .9rem;">Explore verified organizations and request participation.</p>
+      <button class="action" onclick="alert('Requested!')">Join Club</button>
+    </div>
+  </div>
+<script>
+  function tab(n,el){document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));el.classList.add('active');
+  document.getElementById('box').innerHTML=`<h2>${n} Section</h2><p style="color:#666;font-size:.9rem;">Viewing content for ${n}.</p>`;}
+</script>
+</body>
+</html>

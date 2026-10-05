@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Club Tracker - SaaS Preview</title>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --card-bg: #ffffff;
+    --text-main: #0f172a;
+    --text-muted: #64748b;
+    --primary: #4f46e5;
+    --primary-hover: #4338ca;
+    --border: #e2e8f0;
+    --success-bg: #dcfce7;
+    --success-text: #166534;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --primary: #6366f1;
+      --primary-hover: #818cf8;
+      --border: #1f2937;
+      --success-bg: #064e3b;
+      --success-text: #6ee7b7;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text-main);
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+  /* Sidebar */
+  aside {
+    width: 260px;
+    background: var(--card-bg);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 1.5rem;
+  }
+  .brand {
+    font-weight: 700;
+    font-size: 1.2rem;
+    color: var(--primary);
+    margin-bottom: 2rem;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+  .nav-links {
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+    flex: 1;
+  }
+  .nav-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    text-align: left;
+    padding: .75rem 1rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: .95rem;
+    transition: all 0.2s ease;
+  }
+  .nav-btn:hover {
+    background: var(--border);
+    color: var(--text-main);
+  }
+  .nav-btn.active {
+    background: var(--primary);
+    color: #fff;
+  }
+  /* Main Content Area */
+  .main-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  header {
+    padding: 1rem 2rem;
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .user-badge {
+    background: var(--border);
+    padding: .35rem .75rem;
+    border-radius: 20px;
+    font-size: .85rem;
+    font-weight: 500;
+  }
+  content-area {
+    padding: 2rem;
+    max-width: 1000px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+  }
+  h2 { margin-top: 0; font-size: 1.4rem; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+  }
+  th, td {
+    padding: .75rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: .9rem;
+  }
+  th {
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .badge {
+    background: var(--success-bg);
+    color: var(--success-text);
+    padding: .25rem .6rem;
+    border-radius: 99px;
+    font-size: .75rem;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+  <aside>
+    <div class="brand">⚡ Club Tracker</div>
+    <div class="nav-links">
+      <button class="nav-btn active" onclick="switchTab('Clubs', this)">Clubs</button>
+      <button class="nav-btn" onclick="switchTab('Members', this)">Members</button>
+      <button class="nav-btn" onclick="switchTab('Days', this)">Club Days</button>
+      <button class="nav-btn" onclick="switchTab('Check-in', this)">Check-in</button>
+      <button class="nav-btn" onclick="switchTab('Certs', this)">Certificates</button>
+    </div>
+  </aside>
+
+  <div class="main-container">
+    <header>
+      <h3 id="header-title" style="margin:0;">Clubs Directory</h3>
+      <div class="user-badge">student · user #1</div>
+    </header>
+    <div style="padding: 2rem;">
+      <div class="card" id="card-content">
+        <h2>Available Clubs on Campus</h2>
+        <p style="color: var(--text-muted); font-size: .9rem;">Browse active student organizations and check seat availability.</p>
+        <table>
+          <tr>
+            <th>Club Name</th>
+            <th>Advisor</th>
+            <th>Seats Available</th>
+            <th>Status</th>
+          </tr>
+          <tr>
+            <td><strong>AI & Machine Learning Club</strong></td>
+            <td>Dr. Alan Turing</td>
+            <td>42 / 50</td>
+            <td><span class="badge">Open</span></td>
+          </tr>
+          <tr>
+            <td><strong>Robotics Society</strong></td>
+            <td>Dr. Nikola Tesla</td>
+            <td>18 / 30</td>
+            <td><span class="badge">Open</span></td>
+          </tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+  function switchTab(tabName, btnElement) {
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    btnElement.classList.add('active');
+    document.getElementById('header-title').innerText = tabName + ' View';
+    document.getElementById('card-content').innerHTML = `
+      <h2>${tabName} Management</h2>
+      <p style="color: var(--text-muted); font-size: .9rem;">Interactive view loaded successfully for ${tabName}.</p>
+    `;
+  }
+</script>
+</body>
+</html>
