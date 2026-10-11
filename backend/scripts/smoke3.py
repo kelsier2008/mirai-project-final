@@ -26,8 +26,11 @@ def login(c, email):
 
 
 def make_open_day(c, coord, advisor, deadline):
+    # The API rejects a deadline before the Club Day, so a day with an
+    # already-passed deadline is itself dated on that deadline.
+    day_date = deadline[:10] if deadline < "2026-10-10" else "2026-10-10"
     r = c.post("/club-days", headers=coord, json={
-        "club_id": 1, "day_date": "2026-10-10", "title": "Stage 3 smoke",
+        "club_id": 1, "day_date": day_date, "title": "Stage 3 smoke",
         "submission_deadline": deadline})
     day = r.json()["id"]
     c.put(f"/club-days/{day}/plan", headers=coord, json={"body": "Stage 3 smoke plan"})

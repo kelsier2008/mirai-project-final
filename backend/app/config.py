@@ -16,7 +16,35 @@ class Settings(BaseSettings):
     cert_secret: str = ""  # HMAC key; falls back to a key derived from jwt_secret
     public_base_url: str = "http://localhost:8000"  # what the certificate QR points to
 
+    # Deployment
+    cors_origins: str = "*"  # comma-separated origins, or "*" for any
+    app_timezone: str = "Asia/Kolkata"  # "today", reminder windows and the scheduler
+    auto_migrate: bool = True  # apply pending SQL migrations on startup
+    db_connect_attempts: int = 10  # startup retries while the database wakes up
+
+    # Institution branding (served to the frontend by GET /config/public)
+    app_name: str = "Mirai Club Activities Tracker"
+    app_short_name: str = "Mirai Clubs"
+    institution_name: str = "Mirai"
+
+    # Email notifications: disabled while smtp_host is blank
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_security: Literal["starttls", "ssl", "none"] = "starttls"
+
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        origins = [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+        return origins or ["*"]
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.smtp_host.strip() and self.smtp_from.strip())
 
 
 settings = Settings()

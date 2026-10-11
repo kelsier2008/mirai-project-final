@@ -3,16 +3,38 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.config import settings
+from app.core import audit
 from app.core.permissions import current_user
 from app.db import get_conn
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
+class EmailPreferenceIn(BaseModel):
+    enabled: bool
+
+
 class WhatsAppPreferenceIn(BaseModel):
     phone_e164: str | None = Field(default=None, max_length=16)
     enabled: bool
     consent: bool = False
+
+
+@router.get("/email-preference")
+async def get_email_preference(user: dict = Depends(current_user), conn=Depends(get_conn)):
+    enabled = await conn.fetchval("SELECT email_notifications FROM users WHERE id=$1", user["id"])
+    return {"enabled": bool(enabled), "available": settings.email_enabled}
+
+
+@router.put("/email-preference")
+async def update_email_preference(body: EmailPreferenceIn, user: dict = Depends(current_user),
+                                  conn=Depends(get_conn)):
+    async with conn.transaction():
+        await conn.execute("UPDATE users SET email_notifications=$2 WHERE id=$1", user["id"], body.enabled)
+        await audit.log(conn, actor_id=user["id"], action="notifications.email_preference",
+                        entity="users", entity_id=user["id"], after={"enabled": body.enabled})
+    return {"enabled": body.enabled, "available": settings.email_enabled}
 
 
 @router.get("/whatsapp-preference")
@@ -65,11 +87,8 @@ async def update_whatsapp_preference(
             user["id"], final_phone, body.enabled,
         )
         action = "notifications.whatsapp_opt_in" if body.enabled else "notifications.whatsapp_opt_out"
-        await conn.execute(
-            """INSERT INTO audit_log (actor_id, action, entity, entity_id, after_state)
-               VALUES ($1, $2, 'whatsapp_preferences', $1::text, jsonb_build_object('enabled', $3))""",
-            user["id"], action, body.enabled,
-        )
+        await audit.log(conn, actor_id=user["id"], action=action, entity="whatsapp_preferences",
+                        entity_id=user["id"], after={"enabled": body.enabled})
     return {"enabled": body.enabled, "phone_last4": final_phone[-4:] if final_phone else None}
 
 
@@ -81,10 +100,13 @@ async def list_notifications(
     conn=Depends(get_conn),
 ):
     rows = await conn.fetch(
-        """SELECT id, kind, payload, send_at, sent_at, read_at
-           FROM notifications
-           WHERE user_id=$1 AND ($2::boolean = false OR read_at IS NULL)
-           ORDER BY send_at DESC, id DESC LIMIT $3""",
+        """SELECT n.id, n.kind, n.payload, n.send_at, n.sent_at, n.read_at, n.cancelled_at,
+                  COALESCE((SELECT jsonb_agg(jsonb_build_object('channel', d.channel, 'status', d.status))
+                            FROM notification_deliveries d WHERE d.notification_id=n.id), '[]'::jsonb)
+                    AS deliveries
+           FROM notifications n
+           WHERE n.user_id=$1 AND ($2::boolean = false OR n.read_at IS NULL)
+           ORDER BY n.send_at DESC, n.id DESC LIMIT $3""",
         user["id"], unread_only, limit,
     )
     unread = await conn.fetchval(

@@ -1,5 +1,8 @@
 -- Stage 6: read-only rollup views for the dashboards. Safe to run more than once.
-CREATE OR REPLACE VIEW v_club_stats AS
+-- DROP + CREATE (not OR REPLACE) so re-running this file after a later
+-- migration appended columns to the view still succeeds.
+DROP VIEW IF EXISTS v_club_stats;
+CREATE VIEW v_club_stats AS
 SELECT c.id AS club_id, c.name AS club_name, c.campus_id, c.advisor_id, c.capacity,
   (SELECT count(*) FROM club_memberships m
      WHERE m.club_id = c.id AND m.status = 'approved') AS members,

@@ -14,8 +14,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from app.core import audit
-from app.core.permissions import ADMIN_ROLES, current_user, require_role
+from app.core.permissions import ADMIN_ROLES, current_user, require_permission, require_role
 from app.db import get_conn
+from app.services.notify import EVENT_SCHEDULE_KINDS, cancel_outdated, notify_users
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -28,6 +29,11 @@ class EventIn(BaseModel):
     starts_at: AwareDatetime | None = None
     campus_id: int | None = None  # super admin only
     is_inter_college: bool = False
+
+
+class EventRescheduleIn(BaseModel):
+    starts_at: AwareDatetime
+    reason: str = Field(min_length=3, max_length=500)
 
 
 class TeamIn(BaseModel):
@@ -62,6 +68,8 @@ def _event_out(r, registered=None) -> dict:
         "capacity": r["capacity"], "team_size": r["team_size"], "starts_at": s,
         "is_inter_college": r["is_inter_college"],
         "approved_at": r["approved_at"],
+        "rescheduled_at": r["rescheduled_at"],
+        "schedule_version": r["schedule_version"],
         "registered": r["registered"] if registered is None else registered,
         "registration_open": s is None or datetime.now(timezone.utc) < s,
     }
@@ -248,6 +256,66 @@ async def approve_inter_college_event(
                         entity="events", entity_id=event_id,
                         after={"approved": True, "approved_at": row["approved_at"]})
     return {"event_id": event_id, "approved": True, "approved_at": row["approved_at"]}
+
+
+@router.post("/{event_id}/reschedule")
+async def reschedule_event(
+    event_id: int, body: EventRescheduleIn,
+    user: dict = Depends(require_permission("event.reschedule")), conn=Depends(get_conn),
+):
+    """Move an event to a new start time. The old and new times are kept in
+    schedule_changes, reminders about the old time are marked outdated, and
+    registered students plus the host campus admins are notified once."""
+    if body.starts_at <= datetime.now(timezone.utc):
+        raise HTTPException(422, "The new start time must be in the future")
+    async with conn.transaction():
+        ev = await _event_for(conn, user, event_id, lock=True)
+        if await conn.fetchval("SELECT 1 FROM event_results WHERE event_id=$1 LIMIT 1", event_id):
+            raise HTTPException(409, "Results are published; the event can no longer be rescheduled")
+        if ev["starts_at"] == body.starts_at:
+            raise HTTPException(409, "The new start time is the same as the current one")
+        version = ev["schedule_version"] + 1
+        row = await conn.fetchrow(
+            """UPDATE events SET starts_at=$2, schedule_version=$3, rescheduled_at=now()
+               WHERE id=$1 RETURNING *, (SELECT count(*) FROM registrations r WHERE r.event_id=$1) AS registered""",
+            event_id, body.starts_at, version,
+        )
+        reason = body.reason.strip()
+        previous, current = {"starts_at": ev["starts_at"]}, {"starts_at": body.starts_at}
+        await conn.execute(
+            """INSERT INTO schedule_changes (entity, entity_id, version, previous, current, reason, changed_by)
+               VALUES ('event', $1, $2, $3, $4, $5, $6)""",
+            event_id, version, previous, current, reason, user["id"],
+        )
+        await audit.log(conn, actor_id=user["id"], action="event.reschedule", entity="events",
+                        entity_id=event_id, before=previous, after=current, reason=reason)
+        await cancel_outdated(conn, payload_key="event_id", entity_id=event_id, kinds=EVENT_SCHEDULE_KINDS)
+        recipients = {r["student_id"] for r in await conn.fetch(
+            "SELECT student_id FROM registrations WHERE event_id=$1", event_id)}
+        recipients |= {r["id"] for r in await conn.fetch(
+            "SELECT id FROM users WHERE role='campus_admin' AND campus_id=$1", ev["campus_id"])}
+        recipients.discard(user["id"])
+        notified = await notify_users(
+            conn, recipients, "event.rescheduled",
+            {"event_id": event_id, "title": ev["name"], "starts_at": body.starts_at,
+             "previous_starts_at": ev["starts_at"], "reason": reason, "version": version},
+            f"event.rescheduled:{event_id}:v{version}",
+        )
+    out = _event_out(row)
+    out["notified"] = notified
+    return out
+
+
+@router.get("/{event_id}/schedule-history")
+async def event_schedule_history(event_id: int, user: dict = Depends(current_user), conn=Depends(get_conn)):
+    await _event_for(conn, user, event_id)
+    rows = await conn.fetch(
+        """SELECT s.version, s.previous, s.current, s.reason, s.changed_at, u.name AS changed_by_name
+           FROM schedule_changes s LEFT JOIN users u ON u.id=s.changed_by
+           WHERE s.entity='event' AND s.entity_id=$1 ORDER BY s.version DESC""",
+        event_id,
+    )
+    return [dict(r) for r in rows]
 
 
 @router.delete("/{event_id}/register")

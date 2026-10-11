@@ -6,12 +6,15 @@ import time
 from typing import Literal
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app import db, redis_client
 from app.core import audit
-from app.core.permissions import CLUB_MANAGER_ROLES, assert_club_access, require_role
+from app.core.permissions import (
+    CLUB_MANAGER_ROLES, assert_club_access, assert_club_active, current_user, require_role,
+)
+from app.core.scoping import club_scope
 from app.db import get_conn
 from app.services import checkin
 
@@ -56,6 +59,106 @@ class CorrectionIn(BaseModel):
         return v
 
 
+# ------------------------------------------------------------- session history
+_SESSION_SELECT = """
+    SELECT s.id, s.club_day_id, d.club_id, c.name AS club_name, d.title AS club_day_title,
+           d.day_date, d.start_time, d.end_time, d.status AS club_day_status,
+           s.opens_at, s.closes_at, s.late_after,
+           s.geo_lat IS NOT NULL AS geo_required, s.geo_radius_m,
+           CASE WHEN now() < s.opens_at THEN 'scheduled'
+                WHEN now() <= s.closes_at THEN 'live' ELSE 'closed' END AS status,
+           (SELECT count(*) FROM attendance a WHERE a.session_id = s.id) AS checked_in,
+           (SELECT count(*) FROM attendance a WHERE a.session_id = s.id AND a.is_late) AS late,
+           (SELECT count(*) FROM attendance a WHERE a.session_id = s.id AND a.geo_flag) AS geo_flagged,
+           (SELECT count(*) FROM attendance a WHERE a.session_id = s.id AND a.corrected) AS corrected,
+           (SELECT count(*) FROM club_memberships m
+              WHERE m.club_id = d.club_id AND m.status = 'approved') AS eligible_members,
+           uo.name AS opened_by_name, uc.name AS closed_by_name
+    FROM checkin_sessions s
+    JOIN club_days d ON d.id = s.club_day_id
+    JOIN clubs c ON c.id = d.club_id
+    LEFT JOIN users uo ON uo.id = s.opened_by
+    LEFT JOIN users uc ON uc.id = s.closed_by
+"""
+
+
+async def _session_detail(conn, session_id: int) -> dict:
+    row = await conn.fetchrow(_SESSION_SELECT + " WHERE s.id = $1", session_id)
+    if row is None:
+        raise HTTPException(404, "Session not found")
+    return dict(row)
+
+
+@router.get("/sessions")
+async def session_history(
+    club_day_id: int | None = None,
+    club_id: int | None = None,
+    status: Literal["live", "closed", "scheduled"] | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: dict = Depends(require_role(*VIEW_ROLES)),
+    conn=Depends(get_conn),
+):
+    """Check-in sessions the caller may see, newest first. The database is the
+    source of truth, so the live screen can be restored after a page refresh."""
+    frag, val = club_scope(user)
+    params: list = [val]
+    where = [frag]
+    if club_day_id is not None:
+        params.append(club_day_id)
+        where.append(f"s.club_day_id = ${len(params)}")
+    if club_id is not None:
+        params.append(club_id)
+        where.append(f"d.club_id = ${len(params)}")
+    if status == "live":
+        where.append("now() BETWEEN s.opens_at AND s.closes_at")
+    elif status == "closed":
+        where.append("now() > s.closes_at")
+    elif status == "scheduled":
+        where.append("now() < s.opens_at")
+    cond = " AND ".join(where)
+    total = await conn.fetchval(
+        f"""SELECT count(*) FROM checkin_sessions s JOIN club_days d ON d.id = s.club_day_id
+            JOIN clubs c ON c.id = d.club_id WHERE {cond}""", *params)
+    params += [limit, offset]
+    rows = await conn.fetch(
+        _SESSION_SELECT + f" WHERE {cond} ORDER BY s.opens_at DESC, s.id DESC"
+        f" LIMIT ${len(params) - 1} OFFSET ${len(params)}",
+        *params,
+    )
+    return {"total": total, "items": [dict(r) for r in rows]}
+
+
+@router.get("/sessions/{session_id}")
+async def session_detail(
+    session_id: int, user: dict = Depends(current_user), conn=Depends(get_conn)
+):
+    """Staff get the full summary. A student gets the session's club, day and
+    window plus their own check-in state (never the token secret)."""
+    out = await _session_detail(conn, session_id)
+    if user["role"] == "student":
+        member = await conn.fetchval(
+            """SELECT 1 FROM club_memberships
+               WHERE student_id=$1 AND club_id=$2 AND status='approved'""",
+            user["id"], out["club_id"],
+        )
+        if not member:
+            raise HTTPException(404, "Session not found")
+        mine = await conn.fetchrow(
+            """SELECT id, checked_in_at, is_late, geo_flag, corrected FROM attendance
+               WHERE session_id=$1 AND student_id=$2""",
+            session_id, user["id"],
+        )
+        keep = ("id", "club_day_id", "club_id", "club_name", "club_day_title", "day_date",
+                "start_time", "end_time", "opens_at", "closes_at", "late_after", "status",
+                "geo_required")
+        student_out = {k: out[k] for k in keep}
+        student_out["my_checkin"] = dict(mine) if mine else None
+        return student_out
+    await assert_club_access(conn, user, out["club_id"], allow=VIEW_ROLES)
+    return out
+
+
 # ---------------------------------------------------------------- coordinator
 @router.post("/club-days/{club_day_id}/open", status_code=201)
 async def open_window(
@@ -70,7 +173,8 @@ async def open_window(
         )
         if day is None:
             raise HTTPException(404, "Club day not found")
-        await assert_club_access(conn, user, day["club_id"])
+        club = await assert_club_access(conn, user, day["club_id"])
+        assert_club_active(club, "Opening a check-in window")
         if day["status"] != "open":
             raise HTTPException(409, "Club day must be in 'open' status to start check-in")
         active = await conn.fetchval(
@@ -84,22 +188,19 @@ async def open_window(
         row = await conn.fetchrow(
             """INSERT INTO checkin_sessions
                  (club_day_id, secret, opens_at, closes_at, late_after,
-                  geo_lat, geo_lng, geo_radius_m)
+                  geo_lat, geo_lng, geo_radius_m, opened_by)
                VALUES ($1, $2, now(),
                        now() + make_interval(mins => $3::int),
                        now() + make_interval(mins => $4::int),
-                       $5, $6, $7)
+                       $5, $6, $7, $8)
                RETURNING *""",
             club_day_id, secrets.token_hex(32),
             body.duration_minutes, body.late_after_minutes,
-            body.geo_lat, body.geo_lng, body.geo_radius_m,
+            body.geo_lat, body.geo_lng, body.geo_radius_m, user["id"],
         )
     await checkin.cache_session(row, day["club_id"])
     # NEVER return the secret
-    return {k: row[k] for k in (
-        "id", "club_day_id", "opens_at", "closes_at", "late_after",
-        "geo_lat", "geo_lng", "geo_radius_m",
-    )}
+    return await _session_detail(conn, row["id"])
 
 
 @router.get("/sessions/{session_id}/qr")
@@ -137,11 +238,11 @@ async def close_window(
         raise HTTPException(404, "Session not found")
     await assert_club_access(conn, user, sess["club_id"])
     await conn.execute(
-        "UPDATE checkin_sessions SET closes_at = now() WHERE id=$1 AND closes_at > now()",
-        session_id,
+        "UPDATE checkin_sessions SET closes_at = now(), closed_by = $2 WHERE id=$1 AND closes_at > now()",
+        session_id, user["id"],
     )
     await checkin.invalidate_session(session_id)
-    return {"closed": True}
+    return {"closed": True, "session": await _session_detail(conn, session_id)}
 
 
 @router.get("/sessions/{session_id}/attendance")
@@ -161,6 +262,39 @@ async def session_attendance(
         session_id,
     )
     return [dict(r) for r in rows]
+
+
+@router.get("/sessions/{session_id}/roster")
+async def session_roster(
+    session_id: int,
+    user: dict = Depends(require_role(*VIEW_ROLES)),
+    conn=Depends(get_conn),
+):
+    """Every approved member of the club with their state for this session:
+    checked_in (with late/geo/corrected flags) or not_checked_in."""
+    sess = await _session_detail(conn, session_id)
+    await assert_club_access(conn, user, sess["club_id"], allow=VIEW_ROLES)
+    rows = await conn.fetch(
+        """SELECT u.id AS student_id, u.name AS student_name, u.student_code,
+                  a.id AS attendance_id, a.checked_in_at, a.is_late, a.geo_flag,
+                  a.corrected, a.correction_reason,
+                  CASE WHEN a.id IS NULL THEN 'not_checked_in' ELSE 'checked_in' END AS state
+           FROM club_memberships m
+           JOIN users u ON u.id = m.student_id
+           LEFT JOIN attendance a ON a.session_id = $1 AND a.student_id = m.student_id
+           WHERE m.club_id = $2 AND m.status = 'approved'
+           UNION ALL
+           -- attendance kept for students who have since left the club
+           SELECT u.id, u.name, u.student_code, a.id, a.checked_in_at, a.is_late, a.geo_flag,
+                  a.corrected, a.correction_reason, 'checked_in'
+           FROM attendance a JOIN users u ON u.id = a.student_id
+           WHERE a.session_id = $1 AND NOT EXISTS (
+             SELECT 1 FROM club_memberships m WHERE m.club_id = $2
+               AND m.student_id = a.student_id AND m.status = 'approved')
+           ORDER BY 10, 2""",
+        session_id, sess["club_id"],
+    )
+    return {"session": sess, "students": [dict(r) for r in rows]}
 
 
 @router.post("/sessions/{session_id}/corrections")
@@ -288,8 +422,8 @@ async def my_attendance(
     user: dict = Depends(require_role("student")), conn=Depends(get_conn)
 ):
     rows = await conn.fetch(
-        """SELECT a.id, a.checked_in_at, a.is_late, a.corrected,
-                  d.id AS club_day_id, d.day_date, d.title, c.name AS club_name
+        """SELECT a.id, a.session_id, a.checked_in_at, a.is_late, a.geo_flag, a.corrected,
+                  d.id AS club_day_id, d.day_date, d.start_time, d.title, c.name AS club_name
            FROM attendance a
            JOIN checkin_sessions s ON s.id = a.session_id
            JOIN club_days d ON d.id = s.club_day_id

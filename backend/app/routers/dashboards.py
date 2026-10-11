@@ -12,6 +12,8 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.core.permissions import require_role
+from app.core.scoping import club_scope, student_scope
+from app.core.timeutil import today
 from app.db import get_conn
 
 router = APIRouter(prefix="/dashboards", tags=["dashboards"])
@@ -22,31 +24,7 @@ MAX_EXPORT = 20000
 
 
 # ------------------------------------------------------------------ scoping
-def club_scope(user: dict):
-    """SQL condition on clubs alias c, written against $1, plus the value for $1."""
-    role = user["role"]
-    if role == "super_admin":
-        return "$1::bigint IS NOT NULL", 0
-    if role == "campus_admin":
-        return "c.campus_id = $1::bigint", user["campus_id"]
-    if role == "coordinator":
-        return "c.id IN (SELECT club_id FROM club_coordinators WHERE user_id = $1::bigint)", user["id"]
-    return "c.advisor_id = $1::bigint", user["id"]  # advisor
-
-
-def student_scope(user: dict):
-    """SQL condition on the v_student_stats alias v, written against $1."""
-    role = user["role"]
-    if role == "super_admin":
-        return "$1::bigint IS NOT NULL", 0
-    if role == "campus_admin":
-        return "v.campus_id = $1::bigint", user["campus_id"]
-    frag, val = club_scope(user)
-    return (
-        "v.student_id IN (SELECT m.student_id FROM club_memberships m "
-        "JOIN clubs c ON c.id = m.club_id "
-        f"WHERE m.status = 'approved' AND {frag})"
-    ), val
+# club_scope / student_scope live in app.core.scoping (shared with check-in history).
 
 
 async def _club_in_scope(conn, user: dict, club_id: int):
@@ -61,7 +39,8 @@ async def _club_rows(conn, user: dict) -> list[dict]:
     frag, val = club_scope(user)
     rows = await conn.fetch(
         f"""SELECT v.club_id, v.club_name, v.members, v.capacity, v.club_days, v.last_club_day,
-                   v.attendance_records, v.submissions, v.avg_score, v.certificates
+                   v.attendance_records, v.submissions, v.avg_score, v.certificates,
+                   v.approval_status, v.is_active
             FROM v_club_stats v JOIN clubs c ON c.id = v.club_id
             WHERE {frag} ORDER BY v.club_name""",
         val,
@@ -248,8 +227,17 @@ async def summary(user: dict = Depends(require_role(*STAFF)), conn=Depends(get_c
             JOIN events e ON e.id = r.event_id WHERE {ev_frag}""",
         ev_val,
     )
+    by_type = await conn.fetch(
+        f"""SELECT e.type, count(DISTINCT e.id) AS events, count(r.id) AS registrations
+            FROM events e LEFT JOIN registrations r ON r.event_id = e.id
+            WHERE {ev_frag} GROUP BY e.type ORDER BY e.type""",
+        ev_val,
+    )
     return {
         "clubs": len(clubs),
+        "clubs_active": sum(1 for c in clubs if c["is_active"] and c["approval_status"] == "approved"),
+        "clubs_pending_approval": sum(1 for c in clubs if c["approval_status"] == "pending"),
+        "clubs_inactive": sum(1 for c in clubs if not c["is_active"]),
         "members": sum(c["members"] for c in clubs),
         "club_days_total": sum(r["n"] for r in by_status),
         "club_days_approved_or_later": sum(c["club_days"] for c in clubs),
@@ -259,7 +247,42 @@ async def summary(user: dict = Depends(require_role(*STAFF)), conn=Depends(get_c
         "certificates": sum(c["certificates"] for c in clubs),
         "events": events,
         "event_registrations": regs,
+        "events_by_type": [dict(r) for r in by_type],
     }
+
+
+@router.get("/trend")
+async def trend(
+    months: int = Query(6, ge=1, le=24),
+    end: str | None = Query(None, pattern=MONTH_RE),
+    user: dict = Depends(require_role(*STAFF)),
+    conn=Depends(get_conn),
+):
+    """Per-month club days, check-ins and submissions for the last N months,
+    attributed to the club day's date (same rule as the monthly report)."""
+    frag, val = club_scope(user)
+    last = _month_range(end)[0] if end else today().replace(day=1)
+    rows = await conn.fetch(
+        f"""WITH months AS (
+              SELECT generate_series($2::date - make_interval(months => $3::int - 1), $2::date,
+                                     interval '1 month')::date AS m)
+            SELECT to_char(m, 'YYYY-MM') AS month,
+              (SELECT count(*) FROM club_days d JOIN clubs c ON c.id = d.club_id
+                 WHERE {frag} AND d.status <> 'planned'
+                   AND d.day_date >= m AND d.day_date < (m + interval '1 month')::date) AS club_days,
+              (SELECT count(*) FROM attendance a
+                 JOIN checkin_sessions s ON s.id = a.session_id
+                 JOIN club_days d ON d.id = s.club_day_id JOIN clubs c ON c.id = d.club_id
+                 WHERE {frag} AND d.status <> 'planned'
+                   AND d.day_date >= m AND d.day_date < (m + interval '1 month')::date) AS attendance_records,
+              (SELECT count(*) FROM submissions sb
+                 JOIN club_days d ON d.id = sb.club_day_id JOIN clubs c ON c.id = d.club_id
+                 WHERE {frag} AND d.status <> 'planned'
+                   AND d.day_date >= m AND d.day_date < (m + interval '1 month')::date) AS submissions
+            FROM months ORDER BY m""",
+        val, last, months,
+    )
+    return [dict(r) for r in rows]
 
 
 @router.get("/clubs")

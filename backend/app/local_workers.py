@@ -1,10 +1,22 @@
-"""In-process equivalents of the Celery queues used by the local demo mode."""
+"""In-process equivalents of the Celery queues used by the local demo mode.
+
+Only one process runs the scheduler: each API process tries to take a
+PostgreSQL advisory lock and the holder becomes the scheduler leader. Running
+uvicorn with several workers (or several instances on one database) therefore
+never runs the same scheduled job twice; if the leader stops, another process
+takes the lock on its next attempt.
+"""
 import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import asyncpg
+
+from app.config import settings
+
 log = logging.getLogger(__name__)
+SCHEDULER_LOCK_KEY = 72_420_012  # constant advisory-lock id for the scheduler leader
 _certificate_queue: asyncio.Queue[str] | None = None
 _tasks: list[asyncio.Task] = []
 
@@ -41,6 +53,8 @@ def _scheduled_jobs(now: datetime):
             jobs.append(("announce-upcoming-club-days", minute, "workers.tasks_schedule", "announce_upcoming_club_days"))
         if now.minute == 15:
             jobs.append(("reminder-48h", minute, "workers.tasks_schedule", "remind_48h"))
+        if now.minute == 20:
+            jobs.append(("event-reminder-24h", minute, "workers.tasks_schedule", "remind_events_24h"))
         if now.hour == 9 and now.minute == 0:
             jobs.append(("plan-reminder-7d", minute, "workers.tasks_schedule", "remind_plan_7d"))
         if now.hour == 9 and now.minute == 30:
@@ -50,25 +64,59 @@ def _scheduled_jobs(now: datetime):
     return jobs
 
 
+async def _run_job(name: str, module_name: str, task_name: str):
+    try:
+        module = __import__(module_name, fromlist=[task_name])
+        running = asyncio.create_task(asyncio.to_thread(getattr(module, task_name)))
+        try:
+            await asyncio.shield(running)
+        except asyncio.CancelledError:
+            await running
+            raise
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("local scheduled job %s failed", name)
+
+
 async def _scheduler():
-    last_run = {}
-    while True:
-        now = datetime.now(ZoneInfo("Asia/Kolkata"))
-        for name, slot, module_name, task_name in _scheduled_jobs(now):
-            if last_run.get(name) == slot:
-                continue
-            last_run[name] = slot
-            try:
-                module = __import__(module_name, fromlist=[task_name])
-                running = asyncio.create_task(asyncio.to_thread(getattr(module, task_name)))
+    tz = ZoneInfo(settings.app_timezone)
+    lock_conn: asyncpg.Connection | None = None
+    last_run: dict[str, str] = {}
+    try:
+        while True:
+            if lock_conn is None or lock_conn.is_closed():
                 try:
-                    await asyncio.shield(running)
-                except asyncio.CancelledError:
-                    await running
-                    raise
-            except Exception:
-                log.exception("local scheduled job %s failed", name)
-        await asyncio.sleep(15)
+                    lock_conn = await asyncpg.connect(settings.database_url, timeout=10)
+                    leader = await lock_conn.fetchval("SELECT pg_try_advisory_lock($1)", SCHEDULER_LOCK_KEY)
+                except (OSError, asyncpg.PostgresError, asyncio.TimeoutError):
+                    log.warning("scheduler could not reach the database; retrying")
+                    lock_conn = None
+                    await asyncio.sleep(30)
+                    continue
+                if not leader:
+                    # Another process is the scheduler; check again later in case it stops.
+                    await lock_conn.close()
+                    lock_conn = None
+                    await asyncio.sleep(60)
+                    continue
+                log.info("this process is the scheduled-job leader")
+            else:
+                try:  # a dropped connection silently releases the lock
+                    await lock_conn.fetchval("SELECT 1")
+                except (OSError, asyncpg.PostgresError, asyncpg.InterfaceError):
+                    lock_conn = None
+                    continue
+            now = datetime.now(tz)
+            for name, slot, module_name, task_name in _scheduled_jobs(now):
+                if last_run.get(name) == slot:
+                    continue
+                last_run[name] = slot
+                await _run_job(name, module_name, task_name)
+            await asyncio.sleep(15)
+    finally:
+        if lock_conn is not None and not lock_conn.is_closed():
+            await lock_conn.close()  # releases the advisory lock
 
 
 async def start_local_workers():

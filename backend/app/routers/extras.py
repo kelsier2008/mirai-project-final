@@ -10,8 +10,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core import audit
-from app.core.permissions import ADMIN_ROLES, CLUB_MANAGER_ROLES, current_user, require_role
+from app.core.permissions import (
+    ADMIN_ROLES, CLUB_MANAGER_ROLES, current_user, require_permission, require_role,
+)
+from app.core.validation import is_student_code
 from app.db import get_conn
+from app.services.notify import notify_users
 from app.services.storage import get_storage
 from app.services import certificates as certs
 
@@ -30,6 +34,17 @@ class BudgetIn(BaseModel):
 class DecisionIn(BaseModel):
     decision: str
     reason: str | None = Field(default=None, max_length=500)
+
+
+# Budget rows always carry the requester and the decision maker by name, read
+# from the persisted decided_by column (never inferred from the viewer).
+_BUDGET_SELECT = """SELECT b.*, c.name AS club_name, ca.name AS campus_name,
+      rq.name AS requester_name, rq.role AS requester_role,
+      dc.name AS decided_by_name, dc.role AS decided_by_role
+    FROM club_budget_requests b
+    JOIN clubs c ON c.id=b.club_id JOIN campus ca ON ca.id=c.campus_id
+    JOIN users rq ON rq.id=b.requester_id
+    LEFT JOIN users dc ON dc.id=b.decided_by"""
 
 
 class MediaConsentIn(BaseModel):
@@ -80,31 +95,28 @@ async def create_budget_request(body: BudgetIn, user: dict = Depends(require_rol
 
 @router.get("/budgets")
 async def list_budget_requests(user: dict = Depends(require_role(*BUDGET_ROLES)), conn=Depends(get_conn)):
+    order = " ORDER BY b.created_at DESC"
     if user["role"] == "super_admin":
-        rows = await conn.fetch("""SELECT b.*, c.name AS club_name, ca.name AS campus_name
-          FROM club_budget_requests b JOIN clubs c ON c.id=b.club_id JOIN campus ca ON ca.id=c.campus_id
-          ORDER BY b.created_at DESC""")
+        rows = await conn.fetch(_BUDGET_SELECT + order)
     elif user["role"] == "campus_admin":
-        rows = await conn.fetch("""SELECT b.*, c.name AS club_name, ca.name AS campus_name FROM club_budget_requests b
-          JOIN clubs c ON c.id=b.club_id JOIN campus ca ON ca.id=c.campus_id
-          WHERE c.campus_id=$1 ORDER BY b.created_at DESC""", user["campus_id"])
+        rows = await conn.fetch(_BUDGET_SELECT + " WHERE c.campus_id=$1" + order, user["campus_id"])
     elif user["role"] == "coordinator":
-        rows = await conn.fetch("""SELECT b.*, c.name AS club_name, ca.name AS campus_name FROM club_budget_requests b
-          JOIN clubs c ON c.id=b.club_id JOIN campus ca ON ca.id=c.campus_id
-          WHERE b.club_id IN (SELECT club_id FROM club_coordinators WHERE user_id=$1)
-          ORDER BY b.created_at DESC""", user["id"])
+        rows = await conn.fetch(
+            _BUDGET_SELECT + " WHERE b.club_id IN (SELECT club_id FROM club_coordinators WHERE user_id=$1)"
+            + order, user["id"])
     else:
-        rows = await conn.fetch("""SELECT b.*, c.name AS club_name, ca.name AS campus_name FROM club_budget_requests b
-          JOIN clubs c ON c.id=b.club_id JOIN campus ca ON ca.id=c.campus_id
-          WHERE c.advisor_id=$1 ORDER BY b.created_at DESC""", user["id"])
+        rows = await conn.fetch(_BUDGET_SELECT + " WHERE c.advisor_id=$1" + order, user["id"])
     return [dict(r) for r in rows]
 
 
 @router.post("/budgets/{request_id}/decision")
 async def decide_budget(request_id: int, body: DecisionIn,
-                        user: dict = Depends(require_role(*ADMIN_ROLES)), conn=Depends(get_conn)):
+                        user: dict = Depends(require_permission("budget.decide")), conn=Depends(get_conn)):
     if body.decision not in ("approve", "reject"):
         raise HTTPException(422, "decision must be approve or reject")
+    reason = (body.reason or "").strip() or None
+    if body.decision == "reject" and not reason:
+        raise HTTPException(422, "Give a reason when rejecting a budget request")
     async with conn.transaction():
         row = await conn.fetchrow("""SELECT b.*, c.campus_id FROM club_budget_requests b
           JOIN clubs c ON c.id=b.club_id WHERE b.id=$1 FOR UPDATE OF b""", request_id)
@@ -113,12 +125,22 @@ async def decide_budget(request_id: int, body: DecisionIn,
         if row["status"] != "pending":
             raise HTTPException(409, "Budget request has already been decided")
         status = "approved" if body.decision == "approve" else "rejected"
-        updated = await conn.fetchrow("""UPDATE club_budget_requests SET status=$2, decided_by=$3,
-           decided_at=now(), decision_reason=$4 WHERE id=$1 RETURNING *""",
-           request_id, status, user["id"], body.reason)
+        await conn.execute("""UPDATE club_budget_requests SET status=$2, decided_by=$3,
+           decided_at=now(), decision_reason=$4 WHERE id=$1""",
+           request_id, status, user["id"], reason)
         await audit.log(conn, actor_id=user["id"], action=f"budget.{body.decision}",
                         entity="club_budget_requests", entity_id=request_id,
-                        before={"status": "pending"}, after={"status": status}, reason=body.reason)
+                        before={"status": "pending"}, after={"status": status}, reason=reason)
+        updated = await conn.fetchrow(_BUDGET_SELECT + " WHERE b.id=$1", request_id)
+        if updated["requester_id"] != user["id"]:
+            await notify_users(
+                conn, [updated["requester_id"]], f"budget.{status}",
+                {"budget_id": request_id, "club_name": updated["club_name"],
+                 "title": updated["title"], "amount": str(updated["amount"]),
+                 "currency": updated["currency"], "decided_by_name": updated["decided_by_name"],
+                 "reason": reason},
+                f"budget.decision:{request_id}",
+            )
     return dict(updated)
 
 
@@ -167,21 +189,93 @@ async def my_transcript(user: dict = Depends(require_role("student")), conn=Depe
 
 
 async def _transcript(conn, student_id):
+    """Built only from persisted records: attendance, submissions, evaluations,
+    presenter records, certificates, memberships and event participation.
+    Scores appear only for Club Days whose results are published (closed)."""
     student = await conn.fetchrow("SELECT id,name,student_code,campus_id FROM users WHERE id=$1", student_id)
     if student is None:
         raise HTTPException(404, "Student not found")
     campus = await conn.fetchval("SELECT name FROM campus WHERE id=$1", student["campus_id"])
-    club_rows = await conn.fetch("""SELECT d.id, d.title, d.day_date, c.name AS club_name,
-      count(DISTINCT a.id)::int AS attendance_count FROM attendance a
-      JOIN checkin_sessions s ON s.id=a.session_id JOIN club_days d ON d.id=s.club_day_id
-      JOIN clubs c ON c.id=d.club_id WHERE a.student_id=$1
-      GROUP BY d.id,c.name ORDER BY d.day_date""", student_id)
-    event_rows = await conn.fetch("""SELECT e.id,e.name,e.starts_at,r.checked_in_at,
-      er.rank, er.notes FROM registrations r JOIN events e ON e.id=r.event_id
+    max_total = await conn.fetchval("SELECT COALESCE(sum(max_score),0) FROM rubric_criteria")
+    club_rows = await conn.fetch("""
+      WITH days AS (
+        SELECT s.club_day_id AS id FROM attendance a JOIN checkin_sessions s ON s.id=a.session_id
+          WHERE a.student_id=$1
+        UNION SELECT club_day_id FROM submissions WHERE student_id=$1
+        UNION SELECT club_day_id FROM club_day_presenters WHERE student_id=$1
+      ), latest AS (
+        SELECT DISTINCT ON (sb.club_day_id) sb.club_day_id, sb.id AS submission_id, sb.kind,
+               sb.submitted_at, sb.is_late AS submitted_late
+        FROM submissions sb WHERE sb.student_id=$1
+        ORDER BY sb.club_day_id, sb.submitted_at DESC
+      )
+      SELECT d.id, d.title, d.day_date, d.start_time, d.end_time, d.status AS club_day_status,
+             c.name AS club_name, p.topic, p.format,
+             (SELECT count(*) FROM attendance a JOIN checkin_sessions s ON s.id=a.session_id
+                WHERE s.club_day_id=d.id AND a.student_id=$1)::int AS attendance_count,
+             (SELECT min(a.checked_in_at) FROM attendance a JOIN checkin_sessions s ON s.id=a.session_id
+                WHERE s.club_day_id=d.id AND a.student_id=$1) AS checked_in_at,
+             COALESCE((SELECT bool_or(a.is_late) FROM attendance a JOIN checkin_sessions s ON s.id=a.session_id
+                WHERE s.club_day_id=d.id AND a.student_id=$1), false) AS checked_in_late,
+             (SELECT count(*) FROM submissions sb WHERE sb.club_day_id=d.id AND sb.student_id=$1)::int
+               AS submission_count,
+             l.kind AS latest_submission_kind, l.submitted_at AS latest_submitted_at,
+             CASE WHEN l.submission_id IS NULL THEN 'not_submitted'
+                  ELSE COALESCE((SELECT e.status FROM evaluations e WHERE e.submission_id=l.submission_id
+                                 ORDER BY e.updated_at DESC LIMIT 1), 'pending') END AS grading_status,
+             CASE WHEN d.status='closed' THEN
+               (SELECT max((SELECT sum(x.value::numeric) FROM jsonb_each_text(e.scores) x))
+                  FROM submissions sb JOIN evaluations e ON e.submission_id=sb.id
+                  WHERE sb.club_day_id=d.id AND sb.student_id=$1 AND e.status='graded') END AS score,
+             pr.title AS presentation_title,
+             (SELECT ce.status FROM certificates ce WHERE ce.student_id=$1 AND ce.ref_type='club_day'
+                AND ce.ref_id=d.id AND ce.kind='participation' AND ce.revoked_at IS NULL) AS certificate_status
+      FROM days JOIN club_days d ON d.id=days.id JOIN clubs c ON c.id=d.club_id
+      LEFT JOIN activity_plans p ON p.club_day_id=d.id
+      LEFT JOIN latest l ON l.club_day_id=d.id
+      LEFT JOIN club_day_presenters pr ON pr.club_day_id=d.id AND pr.student_id=$1
+      ORDER BY d.day_date, d.id""", student_id)
+    event_rows = await conn.fetch("""SELECT e.id, e.name, e.type, e.starts_at, ca.name AS host_campus,
+      r.created_at AS registered_at, r.checked_in_at, er.rank, er.notes, t.name AS team_name,
+      COALESCE(er.rank, ter.rank) AS final_rank,
+      (SELECT ce.status FROM certificates ce WHERE ce.student_id=r.student_id AND ce.ref_type='event'
+         AND ce.ref_id=e.id AND ce.kind='participation' AND ce.revoked_at IS NULL) AS certificate_status,
+      (SELECT dl.status FROM duty_leave_requests dl WHERE dl.event_id=e.id AND dl.student_id=r.student_id)
+        AS duty_leave_status
+      FROM registrations r JOIN events e ON e.id=r.event_id JOIN campus ca ON ca.id=e.campus_id
       LEFT JOIN event_results er ON er.event_id=e.id AND er.student_id=r.student_id
+      LEFT JOIN team_members tm ON tm.event_id=e.id AND tm.student_id=r.student_id
+      LEFT JOIN teams t ON t.id=tm.team_id
+      LEFT JOIN event_results ter ON ter.event_id=e.id AND ter.team_id=t.id
       WHERE r.student_id=$1 ORDER BY e.starts_at NULLS LAST,e.id""", student_id)
-    return {"student": {"id": student["id"], "name": student["name"], "student_code": student["student_code"], "campus": campus},
-      "club_days": [dict(r) for r in club_rows], "events": [dict(r) for r in event_rows]}
+    memberships = await conn.fetch("""SELECT c.name AS club_name, m.type, m.status, m.created_at,
+      m.decided_at FROM club_memberships m JOIN clubs c ON c.id=m.club_id
+      WHERE m.student_id=$1 AND m.status='approved' ORDER BY m.type, c.name""", student_id)
+    certificates = await conn.fetchval("""SELECT count(*) FROM certificates WHERE student_id=$1
+      AND revoked_at IS NULL AND status='ready'""", student_id)
+    club_days = [dict(r) for r in club_rows]
+    scores = [float(r["score"]) for r in club_days if r["score"] is not None]
+    events = [dict(r) for r in event_rows]
+    for e in events:
+        e["rank"] = e.pop("final_rank")
+    return {
+        "student": {"id": student["id"], "name": student["name"], "student_code": student["student_code"],
+                    "campus": campus},
+        "memberships": [dict(r) for r in memberships],
+        "club_days": club_days,
+        "events": events,
+        "totals": {
+            "club_days_attended": sum(1 for r in club_days if r["attendance_count"]),
+            "submissions": sum(r["submission_count"] for r in club_days),
+            "graded_club_days": len(scores),
+            "average_score": round(sum(scores) / len(scores), 2) if scores else None,
+            "max_score": max_total,
+            "presentations": sum(1 for r in club_days if r["presentation_title"]),
+            "events_registered": len(events),
+            "events_attended": sum(1 for e in events if e["checked_in_at"]),
+            "certificates": certificates,
+        },
+    }
 
 
 @router.get("/transcripts/me.csv")
@@ -189,18 +283,28 @@ async def transcript_csv(user: dict = Depends(require_role("student")), conn=Dep
     data = await _transcript(conn, user["id"])
     stream = io.StringIO()
     writer = csv.writer(stream)
-    writer.writerow(["type", "title", "organization", "date", "attendance", "rank"])
+    writer.writerow(["type", "title", "organization", "date", "attendance", "submission",
+                     "score", "presentation", "rank", "certificate"])
+    safe = lambda v: "" if v is None else ("'" + str(v) if str(v)[:1] in ("=", "+", "-", "@") else str(v))
     for row in data["club_days"]:
-        writer.writerow(["Club day", row["title"] or "Club Day", row["club_name"], row["day_date"], "attended", ""])
+        score = f"{row['score']}/{data['totals']['max_score']}" if row["score"] is not None else ""
+        writer.writerow([safe(x) for x in (
+            "Club day", row["title"] or row["topic"] or "Club Day", row["club_name"], row["day_date"],
+            ("attended (late)" if row["checked_in_late"] else "attended") if row["attendance_count"] else "not checked in",
+            row["grading_status"].replace("_", " "), score, row["presentation_title"] or "", "",
+            row["certificate_status"] or "")])
     for row in data["events"]:
-        writer.writerow(["Event", row["name"], "", row["starts_at"], "checked in" if row["checked_in_at"] else "registered", row["rank"] or ""])
+        writer.writerow([safe(x) for x in (
+            "Event", row["name"], row["host_campus"], row["starts_at"],
+            "checked in" if row["checked_in_at"] else "registered", "", "", row["team_name"] or "",
+            row["rank"] or "", row["certificate_status"] or "")])
     return StreamingResponse(iter([stream.getvalue()]), media_type="text/csv",
       headers={"Content-Disposition": "attachment; filename=student-transcript.csv"})
 
 
 @router.get("/transcripts/me/download")
 async def download_signed_transcript(user: dict = Depends(require_role("student")), conn=Depends(get_conn)):
-    snapshot = jsonable_encoder({"schema": "club-tracker-transcript-v1", "transcript": await _transcript(conn, user["id"])})
+    snapshot = jsonable_encoder({"schema": "mirai-transcript-v2", "transcript": await _transcript(conn, user["id"])})
     document = {**snapshot, "signature": certs.sign_transcript(snapshot)}
     return StreamingResponse(iter([json.dumps(document, ensure_ascii=False, separators=(",", ":"))]),
       media_type="application/json", headers={"Content-Disposition": "attachment; filename=verified-transcript.json"})
@@ -212,12 +316,24 @@ async def verify_signed_transcript(body: TranscriptVerificationIn):
     return {"valid": valid, "schema": body.snapshot.get("schema") if valid else None}
 
 
-@router.get("/transcripts/{student_id}")
-async def student_transcript(student_id: int, user: dict = Depends(require_role(*ADMIN_ROLES)), conn=Depends(get_conn)):
-    student = await conn.fetchrow("SELECT id,campus_id,role FROM users WHERE id=$1", student_id)
-    if student is None or student["role"] != "student" or (user["role"] != "super_admin" and student["campus_id"] != user["campus_id"]):
+@router.get("/transcripts/{student_ref}")
+async def student_transcript(student_ref: str, user: dict = Depends(require_permission("transcript.view_any")),
+                             conn=Depends(get_conn)):
+    """Look a student up by their alphanumeric student ID (e.g. S001, 2024CS-017)
+    or by numeric account ID. Student IDs match case-insensitively."""
+    ref = student_ref.strip()
+    if not is_student_code(ref):
+        raise HTTPException(422, "Enter a student ID made of letters and numbers, optionally "
+                                 "separated by hyphens or underscores (e.g. S001 or 2024-CS-17)")
+    student = await conn.fetchrow(
+        """SELECT id, campus_id, role FROM users WHERE role='student' AND upper(student_code)=upper($1)
+           ORDER BY (student_code=$1) DESC, id LIMIT 1""", ref)
+    if student is None and ref.isdigit() and len(ref) < 19:
+        student = await conn.fetchrow(
+            "SELECT id, campus_id, role FROM users WHERE id=$1 AND role='student'", int(ref))
+    if student is None or (user["role"] != "super_admin" and student["campus_id"] != user["campus_id"]):
         raise HTTPException(404, "Student not found")
-    return await _transcript(conn, student_id)
+    return await _transcript(conn, student["id"])
 
 
 @router.post("/events/{event_id}/media", status_code=201)

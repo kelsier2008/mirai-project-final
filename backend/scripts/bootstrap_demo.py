@@ -1,36 +1,19 @@
-"""Initialize an empty hosted demo database and seed its sample accounts."""
+"""Bring a hosted database up to date before the API starts.
+
+Applies any pending migrations through the tracked migrator (app/migrate.py),
+so an existing demo database also receives new migrations instead of only an
+empty one being initialised. Existing data is preserved.
+"""
 import asyncio
-import os
-from pathlib import Path
+import logging
+import sys
 
-import asyncpg
-
-
-async def main():
-    database_url = os.environ["DATABASE_URL"]
-    conn = None
-    for attempt in range(30):
-        try:
-            conn = await asyncpg.connect(database_url, timeout=5)
-            break
-        except (OSError, asyncpg.PostgresError):
-            if attempt == 29:
-                raise
-            await asyncio.sleep(2)
-
-    try:
-        schema = await conn.fetchval("SELECT to_regclass('public.users')")
-        if schema is None:
-            migrations = Path(__file__).resolve().parents[1] / "migrations"
-            async with conn.transaction():
-                for migration in sorted(migrations.glob("*.sql")):
-                    await conn.execute(migration.read_text())
-            print("Initialized demo database schema.")
-        else:
-            print("Demo database schema already exists; keeping its data.")
-    finally:
-        await conn.close()
-
+from app.migrate import main
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    try:
+        sys.exit(asyncio.run(main()))
+    except RuntimeError as exc:
+        logging.getLogger("bootstrap").error("%s", exc)
+        sys.exit(1)

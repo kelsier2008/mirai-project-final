@@ -15,8 +15,8 @@ celery = Celery(
     include=["workers.tasks_schedule", "workers.tasks_certificates"],
 )
 
-# Assumption: campuses are in India, so schedules run on IST.
-celery.conf.timezone = "Asia/Kolkata"
+# Schedules run on the institution's clock (APP_TIMEZONE, default IST).
+celery.conf.timezone = os.environ.get("APP_TIMEZONE", "Asia/Kolkata")
 
 celery.conf.beat_schedule = {
     # 3-day rule: approved club days become 'announced' and members are notified
@@ -25,6 +25,11 @@ celery.conf.beat_schedule = {
         "schedule": crontab(minute=0),  # hourly
     },
     # outbox pattern: deliver rows from the `notifications` table
+    # registered students get one reminder in the 24 hours before an event
+    "event-reminder-24h": {
+        "task": "workers.tasks_schedule.remind_events_24h",
+        "schedule": crontab(minute=20),
+    },
     "send-pending-notifications": {
         "task": "workers.tasks_schedule.send_pending_notifications",
         "schedule": 60.0,

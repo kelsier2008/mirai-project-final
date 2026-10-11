@@ -2,7 +2,10 @@
 function with its own asyncpg connection.
 
 Scheduled reminders are written to the in-app notification inbox. The unique
-dedupe key makes each reminder idempotent across repeated beat runs.
+dedupe key makes each reminder idempotent across repeated beat runs. Keys for
+schedule-specific reminders include the schedule version once a Club Day or
+event has been rescheduled, so the new date gets its own reminder while the old
+one (marked cancelled at reschedule time) is never repeated.
 """
 import asyncio
 import json
@@ -11,10 +14,20 @@ import os
 
 import asyncpg
 
+from app.config import settings
+from workers.email_delivery import deliver_email
 from workers.task_runtime import celery
 from workers.whatsapp import deliver_whatsapp
 
 log = logging.getLogger(__name__)
+TZ = settings.app_timezone  # institution clock for "today"
+
+
+def _versioned(prefix: str, day_alias: str = "d") -> str:
+    """SQL for a dedupe key: '<prefix>:<id>' plus ':v<n>' after a reschedule.
+    Version 1 keeps the original key format so upgrading never re-sends reminders."""
+    return (f"'{prefix}:' || {day_alias}.id::text || "
+            f"CASE WHEN {day_alias}.schedule_version > 1 THEN ':v' || {day_alias}.schedule_version::text ELSE '' END")
 
 
 async def _with_conn(fn):
@@ -30,29 +43,33 @@ async def _with_conn(fn):
 async def _announce(conn) -> int:
     async with conn.transaction():
         days = await conn.fetch(
-            """UPDATE club_days SET status = 'announced'
-               WHERE status = 'approved'
-                 AND day_date >= (now() AT TIME ZONE 'Asia/Kolkata')::date
-                 AND day_date <= (now() AT TIME ZONE 'Asia/Kolkata')::date + 3
-               RETURNING id, club_id"""
+            """UPDATE club_days d SET status = 'announced'
+               FROM clubs c
+               WHERE c.id = d.club_id AND c.is_active
+                 AND d.status = 'approved'
+                 AND d.day_date >= (now() AT TIME ZONE $1)::date
+                 AND d.day_date <= (now() AT TIME ZONE $1)::date + 3
+               RETURNING d.id, d.club_id""",
+            TZ,
         )
         for d in days:
             await conn.execute(
-                """INSERT INTO notifications (user_id, kind, payload, dedupe_key)
-                   SELECT student_id, 'club_day.announced',
-                          jsonb_build_object('club_day_id', $1::bigint,
-                                             'club_name', (SELECT name FROM clubs WHERE id=$2),
-                                             'day_date', (SELECT day_date FROM club_days WHERE id=$1),
-                                             'title', (SELECT title FROM club_days WHERE id=$1),
-                                             'deadline', (SELECT submission_deadline FROM club_days WHERE id=$1),
-                                             'topic', (SELECT topic FROM activity_plans WHERE club_day_id=$1),
-                                             'format', (SELECT format FROM activity_plans WHERE club_day_id=$1),
-                                             'deliverable', (SELECT deliverable FROM activity_plans WHERE club_day_id=$1),
-                                             'venue', (SELECT venue FROM activity_plans WHERE club_day_id=$1)),
-                          'club_day.announced:' || $1::text || ':' || student_id::text
-                   FROM club_memberships
-                   WHERE club_id = $2 AND status = 'approved'""",
-                d["id"], d["club_id"],
+                f"""INSERT INTO notifications (user_id, kind, payload, dedupe_key)
+                   SELECT m.student_id, 'club_day.announced',
+                          jsonb_build_object('club_day_id', d.id, 'club_id', c.id,
+                                             'club_name', c.name, 'day_date', d.day_date,
+                                             'start_time', to_char(d.start_time, 'HH24:MI'),
+                                             'end_time', to_char(d.end_time, 'HH24:MI'),
+                                             'title', d.title, 'deadline', d.submission_deadline,
+                                             'topic', p.topic, 'format', p.format,
+                                             'deliverable', p.deliverable, 'venue', p.venue),
+                          {_versioned('club_day.announced')} || ':' || m.student_id::text
+                   FROM club_days d JOIN clubs c ON c.id = d.club_id
+                   JOIN club_memberships m ON m.club_id = c.id AND m.status = 'approved'
+                   LEFT JOIN activity_plans p ON p.club_day_id = d.id
+                   WHERE d.id = $1
+                   ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING""",
+                d["id"],
             )
             await conn.execute(
                 """INSERT INTO audit_log (actor_id, action, entity, entity_id, after_state)
@@ -74,42 +91,47 @@ async def _count_pending(conn) -> int:
     async with conn.transaction():
         rows = await conn.fetch(
             """UPDATE notifications SET sent_at=now()
-               WHERE sent_at IS NULL AND send_at <= now() RETURNING id"""
+               WHERE sent_at IS NULL AND send_at <= now() AND cancelled_at IS NULL RETURNING id"""
         )
         return len(rows)
 
 
-async def _dispatch_due(conn) -> tuple[int, int]:
+async def _dispatch_due(conn) -> tuple[int, int, int]:
     in_app_count = await _count_pending(conn)
+    email_count = await deliver_email(conn)
     whatsapp_count = await deliver_whatsapp(conn)
-    return in_app_count, whatsapp_count
+    return in_app_count, email_count, whatsapp_count
 
 
 @celery.task(name="workers.tasks_schedule.send_pending_notifications")
 def send_pending_notifications():
-    """Make due rows available in-app and deliver optional WhatsApp templates."""
-    in_app_count, whatsapp_count = asyncio.run(_with_conn(_dispatch_due))
-    log.info("notifications delivered in-app: %s; WhatsApp: %s", in_app_count, whatsapp_count)
-    return {"in_app": in_app_count, "whatsapp": whatsapp_count}
+    """Make due rows available in-app and deliver optional email/WhatsApp copies."""
+    in_app_count, email_count, whatsapp_count = asyncio.run(_with_conn(_dispatch_due))
+    if in_app_count or email_count or whatsapp_count:
+        log.info("notifications delivered in-app: %s; email: %s; WhatsApp: %s",
+                 in_app_count, email_count, whatsapp_count)
+    return {"in_app": in_app_count, "email": email_count, "whatsapp": whatsapp_count}
 
 
 async def _remind_plan_7d(conn) -> int:
     async with conn.transaction():
         rows = await conn.fetch(
-            """INSERT INTO notifications (user_id, kind, payload, dedupe_key)
+            f"""INSERT INTO notifications (user_id, kind, payload, dedupe_key)
                SELECT cc.user_id, 'club_day.plan_due',
                       jsonb_build_object('club_day_id', d.id, 'club_id', c.id,
-                                         'club_name', c.name, 'day_date', d.day_date),
-                      'club_day.plan_due:' || d.id::text || ':' || cc.user_id::text
+                                         'club_name', c.name, 'day_date', d.day_date,
+                                         'title', d.title),
+                      {_versioned('club_day.plan_due')} || ':' || cc.user_id::text
                FROM club_days d
-               JOIN clubs c ON c.id=d.club_id
+               JOIN clubs c ON c.id=d.club_id AND c.is_active
                JOIN club_coordinators cc ON cc.club_id=c.id
                LEFT JOIN activity_plans p ON p.club_day_id=d.id
                WHERE d.status='planned'
-                 AND (p.id IS NULL OR p.status='rejected')
-                 AND d.day_date=(now() AT TIME ZONE 'Asia/Kolkata')::date + 7
+                 AND (p.id IS NULL OR p.status IN ('draft','rejected'))
+                 AND d.day_date=(now() AT TIME ZONE $1)::date + 7
                ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-               RETURNING id"""
+               RETURNING id""",
+            TZ,
         )
         return len(rows)
 
@@ -124,22 +146,25 @@ def remind_plan_7d():
 async def _remind_48h(conn) -> int:
     async with conn.transaction():
         rows = await conn.fetch(
-            """INSERT INTO notifications (user_id, kind, payload, dedupe_key)
+            f"""INSERT INTO notifications (user_id, kind, payload, dedupe_key)
                SELECT m.student_id, 'club_day.upcoming',
                       jsonb_build_object('club_day_id', d.id, 'club_id', c.id,
                                          'club_name', c.name, 'day_date', d.day_date,
+                                         'start_time', to_char(d.start_time, 'HH24:MI'),
+                                         'end_time', to_char(d.end_time, 'HH24:MI'),
                                          'title', d.title, 'deadline', d.submission_deadline,
                                          'topic', p.topic, 'format', p.format,
                                          'deliverable', p.deliverable, 'venue', p.venue),
-                      'club_day.upcoming:' || d.id::text || ':' || m.student_id::text
+                      {_versioned('club_day.upcoming')} || ':' || m.student_id::text
                FROM club_days d
-               JOIN clubs c ON c.id=d.club_id
+               JOIN clubs c ON c.id=d.club_id AND c.is_active
                JOIN club_memberships m ON m.club_id=c.id AND m.status='approved'
                LEFT JOIN activity_plans p ON p.club_day_id=d.id
                WHERE d.status IN ('announced','approved')
-                 AND d.day_date=(now() AT TIME ZONE 'Asia/Kolkata')::date + 2
+                 AND d.day_date=(now() AT TIME ZONE $1)::date + 2
                ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-               RETURNING id"""
+               RETURNING id""",
+            TZ,
         )
         return len(rows)
 
@@ -154,12 +179,12 @@ def remind_48h():
 async def _remind_deadline_5d(conn) -> int:
     async with conn.transaction():
         rows = await conn.fetch(
-            """INSERT INTO notifications (user_id, kind, payload, dedupe_key)
+            f"""INSERT INTO notifications (user_id, kind, payload, dedupe_key)
                SELECT m.student_id, 'submission.deadline_soon',
                       jsonb_build_object('club_day_id', d.id, 'club_id', c.id,
                                          'club_name', c.name, 'title', d.title,
                                          'deadline', d.submission_deadline),
-                      'submission.deadline_soon:' || d.id::text || ':' || m.student_id::text
+                      {_versioned('submission.deadline_soon')} || ':' || m.student_id::text
                FROM club_days d
                JOIN clubs c ON c.id=d.club_id
                JOIN club_memberships m ON m.club_id=c.id AND m.status='approved'
@@ -184,13 +209,36 @@ def remind_deadline_5d():
     return n
 
 
+async def _remind_events_24h(conn) -> int:
+    async with conn.transaction():
+        rows = await conn.fetch(
+            f"""INSERT INTO notifications (user_id, kind, payload, dedupe_key)
+               SELECT r.student_id, 'event.upcoming',
+                      jsonb_build_object('event_id', e.id, 'title', e.name,
+                                         'starts_at', e.starts_at, 'type', e.type),
+                      {_versioned('event.upcoming', 'e')} || ':' || r.student_id::text
+               FROM events e JOIN registrations r ON r.event_id = e.id
+               WHERE e.starts_at > now() AND e.starts_at <= now() + interval '24 hours'
+               ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+               RETURNING id"""
+        )
+        return len(rows)
+
+
+@celery.task(name="workers.tasks_schedule.remind_events_24h")
+def remind_events_24h():
+    n = asyncio.run(_with_conn(_remind_events_24h))
+    log.info("queued %s event reminder(s)", n)
+    return n
+
+
 async def _monthly_report(conn) -> int:
     async with conn.transaction():
         period_end = await conn.fetchval(
-            "SELECT date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata')::date"
+            "SELECT date_trunc('month', now() AT TIME ZONE $1)::date", TZ
         )
         # Beat runs on days 28-31; report only on the final day of the month.
-        tomorrow = await conn.fetchval("SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date + 1")
+        tomorrow = await conn.fetchval("SELECT (now() AT TIME ZONE $1)::date + 1", TZ)
         if tomorrow.day != 1:
             return 0
         month = period_end.strftime("%Y-%m")

@@ -1,9 +1,12 @@
 import json
+import logging
 
 import asyncpg
 
 from app.config import settings
+from app.migrate import connect_with_retry
 
+log = logging.getLogger(__name__)
 pool: asyncpg.Pool | None = None
 
 
@@ -19,6 +22,10 @@ async def _init_conn(conn: asyncpg.Connection):
 
 async def init_pool():
     global pool
+    # Fail early with a readable message instead of a pool stack trace when the
+    # database is unreachable; retry briefly because it may still be starting.
+    probe = await connect_with_retry(settings.database_url, settings.db_connect_attempts)
+    await probe.close()
     # Pool size matters for the 500-check-in load test: tune min/max per worker.
     min_size, max_size = (1, 5) if settings.app_mode == "local" else (5, 20)
     pool = await asyncpg.create_pool(

@@ -139,3 +139,12 @@ docs/               PRIVACY.md, COST.md
 ## Credits
 
 FastAPI, Uvicorn, asyncpg, PostgreSQL, optional Redis and Celery, WeasyPrint, segno, k6, qrcodejs, bcrypt, PyJWT, and Pydantic. Code was written with assistance from Claude (Anthropic).
+
+## Mirai update (migration 011)
+
+- **Migrations are tracked** in `schema_migrations` and applied by `python -m app.migrate` (also at API startup when `AUTO_MIGRATE=1`, by the `migrate` service in Docker Compose, by `scripts/run_local.sh`, and by the Render start script). Databases created before tracking are baselined automatically; existing data is kept. Back up first: `pg_dump "$DATABASE_URL" > backup.sql`.
+- **Roles and permissions** are defined once in `backend/app/core/permissions.py` (`ROLE_PERMISSIONS`); `/auth/me` returns the server-side role and permissions the UI uses.
+- **New configuration** (see `.env.example`): `CORS_ORIGINS`, `APP_TIMEZONE`, `AUTO_MIGRATE`, `APP_NAME`, `APP_SHORT_NAME`, `INSTITUTION_NAME`, `SMTP_*` (email stays disabled while `SMTP_HOST` is blank), `SEED_DEMO` (Render).
+- **Security:** `.env` was committed to Git in earlier history. It is now untracked and ignored, but treat `JWT_SECRET`, `CERT_SECRET` and `POSTGRES_PASSWORD` from that file as exposed and rotate them (rotating `JWT_SECRET` signs everyone out; rotating `CERT_SECRET` requires re-issuing certificates).
+- **Tests:** `python -m pytest backend/tests/unit` and `docker compose exec api python -m scripts.smoke_mirai` (plus the existing smoke scripts).
+- **Render free tier:** the API sleeps after ~15 minutes idle, so the first request takes about a minute and scheduled reminders pause while it sleeps. Configuration cannot remove that; use a paid instance or `APP_MODE=production` with a worker for reliable reminders.

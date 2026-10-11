@@ -1,3 +1,5 @@
+import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -12,17 +14,43 @@ from app.routers import (
     dashboards, events, extras, notifications, submissions, verify,
 )
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("app.startup")
+
+
+async def _run_migrations():
+    from app.migrate import apply_migrations
+
+    async with db.pool.acquire() as conn:
+        done = await apply_migrations(conn)
+    log.info("database migrations: %s", ", ".join(done) if done else "up to date")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await db.init_pool()
+    started = time.monotonic()
+    log.info("starting %s (mode=%s)", settings.app_name, settings.app_mode)
+    if len(settings.jwt_secret) < 32:
+        log.warning("JWT_SECRET is shorter than 32 characters; use a long random value")
+    try:
+        await db.init_pool()
+    except Exception:
+        log.exception("startup failed: database connection")
+        raise
     workers_started = False
     try:
+        if settings.auto_migrate:
+            try:
+                await _run_migrations()
+            except Exception:
+                log.exception("startup failed: database migrations")
+                raise
         await redis_client.init_redis()
         if settings.app_mode == "local":
             from app.local_workers import start_local_workers
             await start_local_workers()
             workers_started = True
+        log.info("ready in %.1fs", time.monotonic() - started)
         yield
     finally:
         if workers_started:
@@ -32,11 +60,17 @@ async def lifespan(app: FastAPI):
         await db.close_pool()
 
 
-app = FastAPI(title="Club Activities Tracker", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
-# TODO: restrict origins to the real frontend URL before deploying.
+_origins = settings.cors_origin_list
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=_origins,
+    # Auth uses a bearer header, not cookies, so credentials stay off.
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 
