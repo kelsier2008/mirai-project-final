@@ -97,8 +97,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "${APP_NAME:-Mirai Club Activities Tracker} is starting in local mode."
-echo "Frontend: http://127.0.0.1:$WEB_PORT"
+echo "Role portals (served from source; each is built and deployed separately in production):"
+for portal in super-admin campus-manager advisor coordinator student; do
+  echo "  http://127.0.0.1:$WEB_PORT/apps/$portal/"
+done
 echo "API docs: http://127.0.0.1:$API_PORT/docs"
+if [[ "$API_PORT" != "8000" ]]; then
+  echo "The portals look for the API on port 8000; use Connection settings on the sign-in screen to point them at port $API_PORT."
+fi
 LAN_IP=""
 for interface in en0 en1; do
   LAN_IP="$(ipconfig getifaddr "$interface" 2>/dev/null || true)"
@@ -108,7 +114,7 @@ if [[ -z "$LAN_IP" ]]; then
   LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 fi
 if [[ -n "$LAN_IP" ]]; then
-  echo "On this network: http://$LAN_IP:$WEB_PORT (API: http://$LAN_IP:$API_PORT)"
+  echo "On this network: http://$LAN_IP:$WEB_PORT/apps/student/ (other portals under /apps/; API: http://$LAN_IP:$API_PORT)"
 else
   echo "To open on another device, use this computer's LAN IP with ports $WEB_PORT (frontend) and $API_PORT (API)."
 fi

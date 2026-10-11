@@ -42,7 +42,7 @@ async def public_config():
             "student": "Student",
             "coordinator": "Club coordinator",
             "advisor": "Faculty advisor",
-            "campus_admin": "Campus admin",
+            "campus_admin": "Campus manager",
             "super_admin": "Super admin",
         },
     }

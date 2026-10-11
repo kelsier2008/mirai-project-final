@@ -1,0 +1,17 @@
+import {h,go} from '../../core/dom.js';
+import {api} from '../../core/api.js';
+import {me,roleLabel} from '../../core/state.js';
+import {fmt,STATUS} from '../../core/format.js';
+import {pill,card,heading,tbl,statGrid,picker} from '../../components/ui.js';
+import {KIND,kindLabel,noticeText} from './notice-text.js';
+
+// ---------- Notification history (campus managers and super admins) ----------
+export const notificationLogPage=async b=>{const kind=picker([['','All types'],...Object.entries(KIND)],{'aria-label':'Type'}),channel=picker([['','All channels'],['in_app','In-app'],['email','Email'],['whatsapp','WhatsApp']],{'aria-label':'Channel'}),status=picker([['','Any state'],['sent','Delivered in-app / sent'],['pending','Pending'],['failed','Failed'],['cancelled','Cancelled / outdated'],['unread','Unread'],['read','Read']],{'aria-label':'State'}),sumBox=h('div'),list=h('div'),pager=h('div',{class:'pager'});let offset=0;const limit=50;
+ const load=async()=>{const q=new URLSearchParams({limit,offset});if(kind.value)q.set('kind',kind.value);if(channel.value)q.set('channel',channel.value);if(status.value)q.set('status',status.value);const r=await api('GET','/admin/notifications?'+q);
+  const del={};r.deliveries.forEach(d=>{(del[d.channel]??={})[d.status]=d.n});
+  sumBox.replaceChildren(statGrid([['Matching notifications',fmt.n(r.total)],['In-app delivered',fmt.n(r.in_app.delivered),`${fmt.n(r.in_app.read)} read · ${fmt.n(r.in_app.cancelled)} outdated`],...['email','whatsapp'].map(c=>[c==='email'?'Email':'WhatsApp',fmt.n(del[c]?.sent||0)+' sent',del[c]?Object.entries(del[c]).filter(([s])=>s!=='sent').map(([s,n])=>`${fmt.n(n)} ${STATUS[s]?.[0].toLowerCase()||s}`).join(' · ')||'no failures':'not used'])]));
+  list.replaceChildren(tbl(r.items,[['When',n=>h('span',{class:'nowrap'},fmt.dt(n.send_at))],['Type',n=>h('strong',{},kindLabel(n.kind))],['Message',n=>h('small',{style:'display:block;min-width:220px'},noticeText(n)||'—')],['Recipient',n=>[h('strong',{},n.recipient_name),h('small',{class:'field-hint'},`${roleLabel(n.recipient_role)}${n.recipient_campus?' · '+n.recipient_campus:''}`)]],['Related',n=>n.payload?.club_day_id?`Club Day #${n.payload.club_day_id}`:n.payload?.event_id?`Event #${n.payload.event_id}`:n.payload?.budget_id?`Budget #${n.payload.budget_id}`:'—'],
+   ['Delivery',n=>h('div',{class:'pill-row'},n.cancelled_at?pill('cancelled','In-app: outdated'):pill(n.sent_at?'sent':'pending',`In-app: ${n.sent_at?(n.read_at?'read':'delivered'):'queued'}`),...n.deliveries.map(d=>h('span',{title:d.error_code?`Error code: ${d.error_code} · ${d.attempts} attempt(s)`:`${d.attempts} attempt(s)`},pill(d.status,`${d.channel==='email'?'Email':'WhatsApp'}: ${STATUS[d.status]?.[0]||d.status}${d.error_code?' ('+d.error_code+')':''}`))))]],'No notifications match these filters'));
+  pager.replaceChildren(`${r.total?offset+1:0}–${Math.min(offset+limit,r.total)} of ${fmt.n(r.total)}`,h('button',{type:'button',class:'s',disabled:offset===0,onclick:()=>{offset=Math.max(0,offset-limit);go(load)}},'Previous'),h('button',{type:'button',class:'s',disabled:offset+limit>=r.total,onclick:()=>{offset+=limit;go(load)}},'Next'))};
+ [kind,channel,status].forEach(s=>s.onchange=()=>{offset=0;go(load)});
+ b.append(card(heading(me.role==='super_admin'?'All campuses':'Your campus','Filters'),h('div',{class:'filters'},h('label',{},'Type',kind),h('label',{},'Channel',channel),h('label',{},'State',status)),sumBox),card(heading('Contact details and provider responses are never shown','History'),list,pager));await load()};

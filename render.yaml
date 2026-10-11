@@ -1,3 +1,5 @@
+# Render hosts the shared Mirai API and its PostgreSQL database. The five role portals
+# are deployed separately to Cloudflare Pages; see docs/CLOUDFLARE_DEPLOYMENT.md.
 services:
   - type: web
     name: club-tracker-demo-api
@@ -25,19 +27,14 @@ services:
         generateValue: true
       - key: UPLOAD_DIR
         value: /tmp/uploads
+      # The five role portals are static sites on Cloudflare Pages
+      # (docs/CLOUDFLARE_DEPLOYMENT.md). List their exact origins, comma-separated.
+      - key: CORS_ORIGINS
+        sync: false
+      # Optional: a pattern for Cloudflare Pages preview deployments.
+      - key: CORS_ORIGIN_REGEX
+        sync: false
       - key: PUBLIC_BASE_URL
-        fromService:
-          name: club-tracker-demo-api
-          type: web
-          envVarKey: RENDER_EXTERNAL_URL
-
-  - type: web
-    name: club-tracker-demo
-    runtime: static
-    buildCommand: python3 scripts/build_public_frontend.py
-    staticPublishPath: ./dist/public-frontend
-    envVars:
-      - key: API_BASE_URL
         fromService:
           name: club-tracker-demo-api
           type: web

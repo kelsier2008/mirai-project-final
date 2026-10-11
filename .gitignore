@@ -5,7 +5,14 @@
 
 # Local runtime data (PostgreSQL cluster, uploads, generated JWT secret)
 .local/
+# Portal builds (frontend/apps/<portal>/dist) are produced by Cloudflare Pages at deploy time.
 dist/
+
+# Frontend test tooling
+node_modules/
+frontend/.e2e-builds/
+frontend/playwright-report/
+frontend/test-results/
 
 # Python
 __pycache__/

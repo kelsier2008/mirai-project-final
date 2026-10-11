@@ -68,10 +68,51 @@ Not measured here: the breaking point above 500 students, sustained load over mi
 - `bash -n scripts/run_local.sh`, Docker Compose configuration validation, Python syntax parsing, frontend inline-script parsing, and direct in-memory cache/schedule checks passed.
 - The full local launch was not exercised: this host has no PostgreSQL binaries, no running Docker daemon, and no pytest installation. Therefore API startup, migrations, certificate rendering, scheduler operations, and the retained production Celery/Redis path still need an integration run on a machine with the required services.
 
+## Role portal split (2026-10-11)
+
+The single-file frontend was split into five role portals (docs/ROLE_PORTALS.md). Every command below was run on macOS (Apple silicon) with Python 3.12, Node 26 and Docker. The API ran in `APP_MODE=local` from `backend/Dockerfile` against `postgres:16`, with the demo seed. No production data was used.
+
+| Suite | Before the change | After the change |
+|---|---|---|
+| `python -m pytest backend/tests/unit` | 67 passed | 79 passed (12 new CORS tests in `test_cors.py`) |
+| `scripts.smoke` / `smoke3` / `smoke4` / `smoke5` | 26/26, 29/29, 35/35, 38/38 | same, on a fresh database |
+| `scripts.smoke6` | 43/44 | 43/44 in the same order on a fresh database; 44/44 when run alone on a fresh database |
+| `scripts.smoke_mirai` | 110/110 | 110/110 |
+| `node --test frontend/tests/*.test.mjs` (new) | n/a | 48 passed |
+| `npm run test:e2e` in `frontend/` (new, Playwright, Chromium) | n/a | 57 passed |
+
+**The smoke6 failure is not new.** Its "an empty month is all zeros" check fails whenever `smoke3` ran first on the same database, because smoke3 creates a Club Day dated 2020-01. smoke6 also assumes the demo coordinator runs only Robotics, so running it after `smoke_mirai` or the E2E suite on the same database adds failures. The E2E suite now creates its own coordinator and advisor accounts so that it leaves the demo staff alone.
+
+The end-to-end suite runs each portal from its own production build, on its own origin, against the real API. The API was started with `CORS_ORIGINS` listing only the test origins, and every test fails on any console error, CSP violation or unexpected network request. It covers:
+- **Each portal:** its own sign-in; only its own pages, in the original order; page URLs from other portals fall back to home; the session survives a reload; sign-out clears the token; no demo logins or API override in production builds.
+- **Wrong role:** an account of another role is turned away with a link to its own portal, and no token is kept. The same happens to a stored token of another role.
+- **Failures:** a wrong password, and an invalid or expired token mid-session (back to sign-in with a message). An unreachable API gives a readable message. Separate origins keep separate sessions. An unlisted origin is blocked by CORS.
+- **Workflows, each step in the portal that owns it:**
+  - Account provisioning (student, coordinator, advisor) and club creation with an advisor and coordinator.
+  - Join request and approval.
+  - Club Day creation, plan submission and advisor approval.
+  - Announce and open.
+  - Rotating-QR check-in: the QR renders under the CSP with the SRI-checked library, and a duplicate scan is not recorded twice.
+  - Roster.
+  - Photo upload and preview, and link submission.
+  - Rubric grading, then close and publish.
+  - The published score, the certificate claim and PDF download (checked as `%PDF`), and the verify link.
+  - Student record and CSV.
+  - Budget request (coordinator cannot approve), then approval by the campus manager.
+  - Event creation, registration, team, check-in and reschedule.
+  - The notification in the student inbox, then mark-all-read.
+  - Dashboard CSV, notification history, Duty Leave and transcript lookup.
+  - Campus and club creation by the super admin, and the campus comparison.
+  - Campus scoping in the UI and the API.
+- **The API refuses what the portals hide:** student, coordinator, advisor and campus-manager tokens on endpoints outside their role or scope. Forged, unsigned and altered JWTs are rejected (401). Admin calls made from inside the Student Portal page are refused (403).
+- **Development mode:** the unbuilt source served as `scripts/run_local.sh` does: the launcher page, demo login, API override and links between portals.
+
+Not covered: real Cloudflare Pages deployments (nothing was deployed), browsers other than Chromium, the camera QR scanner (`BarcodeDetector`), and the production `APP_MODE` with Redis and Celery in this run.
+
 ## Known limitations
 
 - No rate limiting on the public verify endpoints (only a 5 MB upload cap).
-- CORS is open to all origins (development setting).
+- CORS defaults to all origins for development; deployments set `CORS_ORIGINS` to the portal origins.
 - Files are stored on a local Docker volume, not S3.
 - The existing smoke and load results above do not cover the latest calendar, approval and reporting additions.
 - Non-Latin names in certificates need an extra font package.

@@ -2,7 +2,27 @@
 
 A multi-campus platform for club activities: join requests, club days with a rotating-QR check-in, submissions with rubric scoring, verifiable PDF certificates, events with teams, and dashboards that reconcile with the raw data.
 
-Backend: FastAPI and PostgreSQL. Production can use Redis and Celery; local mode runs without them. Frontend: one static HTML file (no build step).
+Backend: FastAPI and PostgreSQL. Production can use Redis and Celery; local mode runs without them. Frontend: five role portals (Super Admin, Campus Manager, Advisor, Coordinator, Student), each a separate static site built from shared vanilla JavaScript modules and deployed on its own, for example to Cloudflare Pages. All five use the same API and database.
+
+## Role portals
+
+| Portal | Role | Source |
+|---|---|---|
+| Super Admin Portal | `super_admin` | `frontend/apps/super-admin` |
+| Campus Manager Portal | `campus_admin` | `frontend/apps/campus-manager` |
+| Advisor Portal | `advisor` | `frontend/apps/advisor` |
+| Coordinator Portal | `coordinator` | `frontend/apps/coordinator` |
+| Student Portal | `student` | `frontend/apps/student` |
+
+Shared code (API client, sign-in, layout, components and every feature page) lives once in `frontend/shared/`. A portal's `pages.js` picks the pages it uses, and its build contains only those modules. Each portal accepts only its own role; someone who signs in to the wrong portal is told which one to use and can sign out. That check is for the user's benefit only: the API still enforces every permission and campus/club scope. Details: [docs/ROLE_PORTALS.md](docs/ROLE_PORTALS.md). Deployment: [docs/CLOUDFLARE_DEPLOYMENT.md](docs/CLOUDFLARE_DEPLOYMENT.md).
+
+Build one portal (Node.js 18+, no npm packages needed):
+
+```sh
+node frontend/scripts/build-portal.mjs student --api-base-url https://api.example.edu
+```
+
+The other portal names are `super-admin`, `campus-manager`, `advisor` and `coordinator`. Output goes to `frontend/apps/<portal>/dist/`. On Cloudflare, set `MIRAI_API_BASE_URL` instead of passing `--api-base-url`.
 
 ## Status
 
@@ -36,15 +56,15 @@ pip install -r backend/requirements.txt
 ./scripts/run_local.sh --demo
 ```
 
-Open http://127.0.0.1:5500 and sign in with a demo account (password: `password123`). API docs are at http://127.0.0.1:8000/docs. PostgreSQL data, generated uploads, and a local JWT secret persist under `.local/`. The check-in cache is in memory and clears on restart. Use `./scripts/run_local.sh` without `--demo` to skip demo data. The PostgreSQL server stays running after the app exits so its data remains available; stop it with `$(brew --prefix postgresql@16)/bin/pg_ctl -D .local/postgres stop`.
+Open a portal, for example http://127.0.0.1:5500/apps/student/ or http://127.0.0.1:5500/apps/coordinator/ (http://127.0.0.1:5500 lists all five), and sign in with a demo account for that portal's role (password: `password123`; development only). API docs are at http://127.0.0.1:8000/docs. PostgreSQL data, generated uploads, and a local JWT secret persist under `.local/`. The check-in cache is in memory and clears on restart. Use `./scripts/run_local.sh` without `--demo` to skip demo data. The PostgreSQL server stays running after the app exits so its data remains available; stop it with `$(brew --prefix postgresql@16)/bin/pg_ctl -D .local/postgres stop`.
 
-The local launcher also makes the frontend and API reachable from other devices on your local network. Keep your computer and phone/tablet on the same Wi-Fi, run the launcher, then open the printed **On this network** frontend URL on the other device. The frontend automatically uses that same computer address for API requests. If your network blocks local connections, allow ports 5500 and 8000 through the computer's firewall. The database remains private to the computer.
+The local launcher also makes the frontend and API reachable from other devices on your local network. Keep your computer and phone/tablet on the same Wi-Fi, run the launcher, then open the printed **On this network** portal URL on the other device. The frontend automatically uses that same computer address for API requests. If your network blocks local connections, allow ports 5500 and 8000 through the computer's firewall. The database remains private to the computer.
 
 If multiple Python versions are installed, activate the virtual environment before launching, or set `PYTHON_BIN=python3.12`. If PostgreSQL tools are installed outside the standard Homebrew location, set `PG_BIN` to the installation's `bin` directory. WhatsApp delivery still needs Meta credentials, an approved template, network access, and user opt-in.
 
 ## Public demo preview
 
-`render.yaml` defines a public Render preview: a static frontend, API, and seeded PostgreSQL database. Connect this repository to Render and deploy the Blueprint. The first API start applies the migrations and creates the demo accounts; subsequent starts preserve the database contents. The frontend is configured to call the deployed API over HTTPS.
+`render.yaml` defines the API and a seeded PostgreSQL database on Render. Connect this repository to Render and deploy the Blueprint, then set `CORS_ORIGINS` on the API to the portal origins. The first API start applies the migrations and creates the demo accounts; later starts keep the database contents. The five portals are deployed separately to Cloudflare Pages with `MIRAI_API_BASE_URL` set to the API's HTTPS address (see docs/CLOUDFLARE_DEPLOYMENT.md). For a demo environment only, `MIRAI_DEMO_ACCOUNTS=1` shows the demo logins on the sign-in screens.
 
 This uses free demo services. The API can take about a minute to wake after 15 minutes without traffic, the free PostgreSQL database expires after 30 days, and uploaded files are temporary. Scheduled jobs pause while the API sleeps. Demo logins are listed below and share the password `password123`; visitors can change shared demo data. Keep real student information out of this public preview. WhatsApp stays disabled without credentials.
 
@@ -56,7 +76,7 @@ The existing Docker setup remains available for the multi-container production-s
 cp .env.example .env        # then set the secrets (see below)
 docker compose up --build
 docker compose exec api python -m scripts.seed      # demo users
-cd frontend && python3 -m http.server 5500          # open http://localhost:5500
+cd frontend && python3 -m http.server 5500          # open http://localhost:5500/apps/<portal>/
 ```
 
 - API docs: http://localhost:8000/docs
@@ -74,7 +94,7 @@ Demo logins (password: password123): s001@demo.edu, s002@demo.edu, s003@demo.edu
 
 ```mermaid
 flowchart LR
-  UI[Browser: frontend/index.html] -->|JSON over HTTP| API[FastAPI]
+  UI[Five role portals: frontend/apps/*] -->|JSON over HTTPS| API[FastAPI]
   QR[Phone and public verify page] --> API
   API --> PG[(PostgreSQL)]
   API --> R[(Redis)]
@@ -107,6 +127,16 @@ docker compose exec api python -m scripts.smoke     # also smoke3, smoke4, smoke
 bash loadtest/run.sh                                # needs Docker; takes a few minutes
 ```
 
+Frontend (Node.js 18+):
+
+```
+node --test frontend/tests/*.test.mjs               # portal config, module boundaries, build script
+cd frontend && npm ci && npx playwright install chromium
+MIRAI_E2E_API=http://127.0.0.1:8000 npm run test:e2e  # all five portals against a running API with demo data
+```
+
+The end-to-end tests build every portal for the given API, serve each on its own origin (ports 5601-5605, the unbuilt source on 5612) and run real workflows through the portal that owns each step. They create their own accounts and clubs; run them against development data only.
+
 Results, what each script covers, and what is not covered are in TEST_REPORT.md. Raw outputs are in test-results/ and loadtest/results/.
 
 ## Repository layout
@@ -116,14 +146,19 @@ backend/app/        routers, services, core (permissions, state machines, audit)
 backend/workers/    Celery app, scheduled tasks, certificate generation
 backend/migrations/ SQL schema, one file per stage
 backend/scripts/    seed data, smoke tests, load-test data prep
-frontend/index.html the whole client
+frontend/apps/      the five role portals (entry page, config and page list each)
+frontend/shared/    shared modules: API client, sign-in, layout, components, feature pages
+frontend/scripts/   build-portal.mjs (one portal per build), serve.mjs (local preview)
+frontend/tests/     portal config, module boundary and build tests (node --test)
+frontend/e2e/       Playwright tests of all five portals against a real API
 loadtest/           k6 script, driver, report builder, results
 docs/               PRIVACY.md, COST.md
 ```
 
 ## Known limitations
 
-- CORS is open to every origin and there is no HTTPS (development settings).
+- CORS defaults to every origin (`CORS_ORIGINS=*`) for local development; deployments must list the portal origins exactly (docs/CLOUDFLARE_DEPLOYMENT.md). The API itself serves plain HTTP; use a host that terminates HTTPS (Render does).
+- Staff check-in loads the QR library from cdnjs (pinned version with an integrity hash); if cdnjs is blocked, students type the session ID and code instead.
 - No rate limiting on the public verify endpoints, only a 5 MB upload cap.
 - Login tokens last 8 hours and carry the role, so a role change takes effect at the next login.
 - There is no endpoint to deactivate or delete a user.

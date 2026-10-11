@@ -3,11 +3,11 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import db, redis_client
 from app.config import settings
+from app.core.cors import add_cors, allows_any_origin
 from app.core.state_machines import InvalidTransition
 from app.routers import (
     admin, auth, certificates, checkin, club_days, clubs, health, memberships,
@@ -32,6 +32,9 @@ async def lifespan(app: FastAPI):
     log.info("starting %s (mode=%s)", settings.app_name, settings.app_mode)
     if len(settings.jwt_secret) < 32:
         log.warning("JWT_SECRET is shorter than 32 characters; use a long random value")
+    if allows_any_origin(settings):
+        log.warning("CORS_ORIGINS is '*': any website can call this API from a browser. "
+                    "List the portal origins for a real deployment (docs/CLOUDFLARE_DEPLOYMENT.md)")
     try:
         await db.init_pool()
     except Exception:
@@ -61,17 +64,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
-
-_origins = settings.cors_origin_list
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_origins,
-    # Auth uses a bearer header, not cookies, so credentials stay off.
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
-)
+add_cors(app, settings)
 
 
 @app.exception_handler(InvalidTransition)

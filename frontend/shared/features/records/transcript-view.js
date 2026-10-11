@@ -1,0 +1,10 @@
+import {h} from '../../core/dom.js';
+import {fmt} from '../../core/format.js';
+import {pill,tbl,statGrid,whenCell} from '../../components/ui.js';
+
+// Transcript sections shared by the student record and the staff lookup.
+export function transcriptView(t){const tot=t.totals||{};
+ return[statGrid([['Club Days attended',fmt.n(tot.club_days_attended)],['Submissions',fmt.n(tot.submissions)],['Average score',tot.average_score==null?'—':`${fmt.score(tot.average_score)} / ${tot.max_score}`,`${fmt.n(tot.graded_club_days)} graded Club Day(s)`],['Presentations',fmt.n(tot.presentations)],['Events attended',`${fmt.n(tot.events_attended)} / ${fmt.n(tot.events_registered)}`],['Certificates',fmt.n(tot.certificates)]]),
+  t.memberships?.length?h('p',{class:'mut'},'Clubs: '+t.memberships.map(m=>`${m.club_name} (${m.type})`).join(', ')):null,
+  h('h4',{},'Club Days'),tbl(t.club_days,[['Activity',r=>[h('strong',{},r.title||r.topic||'Club Day'),r.topic&&r.title&&h('small',{class:'field-hint'},r.topic)]],['Club','club_name'],['Date',r=>whenCell(r)],['Attendance',r=>r.attendance_count?pill('checked_in',r.checked_in_late?'Attended (late)':'Attended'):pill('neutral','Not checked in')],['Submission',r=>[pill(r.grading_status),r.submission_count>1&&h('small',{class:'field-hint'},`${r.submission_count} versions`)]],['Score',r=>r.score!=null?`${fmt.score(r.score)} / ${t.totals?.max_score}`:r.club_day_status==='closed'?'—':h('small',{class:'mut'},'Published at close')],['Presented',r=>r.presentation_title||'—'],['Certificate',r=>r.certificate_status?pill(r.certificate_status):'—']],'No Club Day activity recorded yet'),
+  h('h4',{},'Events'),tbl(t.events,[['Event',r=>[h('strong',{},r.name),h('small',{class:'field-hint'},r.type.replaceAll('_',' ')+' · '+r.host_campus)]],['Date',r=>r.starts_at?fmt.date(r.starts_at):'—'],['Attendance',r=>r.checked_in_at?pill('checked_in'):pill('registered')],['Team',r=>r.team_name||'—'],['Rank',r=>r.rank||'—'],['Certificate',r=>r.certificate_status?pill(r.certificate_status):'—'],['Duty Leave',r=>r.duty_leave_status?pill(r.duty_leave_status):'—']],'No events yet')]}

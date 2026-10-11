@@ -1,5 +1,7 @@
+import re
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -18,6 +20,9 @@ class Settings(BaseSettings):
 
     # Deployment
     cors_origins: str = "*"  # comma-separated origins, or "*" for any
+    # Optional pattern for more browser origins, e.g. Cloudflare Pages preview deployments:
+    # ^https://[a-z0-9-]+\.mirai-student\.pages\.dev$ (blank: exact CORS_ORIGINS only)
+    cors_origin_regex: str = ""
     app_timezone: str = "Asia/Kolkata"  # "today", reminder windows and the scheduler
     auto_migrate: bool = True  # apply pending SQL migrations on startup
     db_connect_attempts: int = 10  # startup retries while the database wakes up
@@ -36,6 +41,16 @@ class Settings(BaseSettings):
     smtp_security: Literal["starttls", "ssl", "none"] = "starttls"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @field_validator("cors_origin_regex")
+    @classmethod
+    def _valid_origin_regex(cls, value: str) -> str:
+        value = value.strip()
+        try:
+            re.compile(value)  # fail at startup, not on the first cross-origin request
+        except re.error as exc:
+            raise ValueError(f"CORS_ORIGIN_REGEX is not a valid regular expression: {exc}") from exc
+        return value
 
     @property
     def cors_origin_list(self) -> list[str]:
