@@ -1,0 +1,37 @@
+/* Design tokens. Estimated from the reference screenshots. */
+@theme {
+  --font-sans: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --color-page: #f3f6fc;
+  --color-card: #ffffff;
+  --color-line: #e6eaf3;
+  --color-ink: #0b1f5c;
+  --color-muted: #6b7490;
+  --color-primary: #1f4fd8;
+  --color-primary-soft: #eaf0ff;
+  --color-navy: #0b2a7a;
+  --color-sky: #4a78e6;
+  --color-success: #2fb36d;
+  --color-success-soft: #e6f6ee;
+  --color-danger: #c0262d;
+  --color-danger-bar: #e5484d;
+  --color-panel: #eef0f4;
+  --color-bar: #eaf0fa;
+  --color-teal-badge: #d7f0f4;
+  --color-teal-ink: #0f6f80;
+
+  --radius-card: 16px;
+  --radius-tile: 12px;
+  --radius-field: 10px;
+  --radius-subject: 14px;
+
+  --shadow-card: 0 2px 8px rgba(16, 24, 64, 0.06);
+  --shadow-lift: 0 8px 22px rgba(16, 24, 64, 0.12);
+
+  --spacing-sidebar: 275px;
+  --spacing-topbar: 60px;
+}
+
+:root {
+  --sidebar-gradient: linear-gradient(180deg, #0b2a7a 0%, #1f4fd8 55%, #4a78e6 100%);
+}
