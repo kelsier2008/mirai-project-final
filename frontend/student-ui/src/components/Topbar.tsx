@@ -1,12 +1,12 @@
 import { GraduationCap, Menu } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
-import { navItems } from './Sidebar';
+import { moreItems, navItems } from './Sidebar';
 
 const titles: Record<string, string> = { '/courses': 'My Subjects' };
 
 export function Topbar({ onMenu, chip }: { onMenu: () => void; chip?: string }) {
   const { pathname } = useLocation();
-  const match = navItems.find((n) => (n.end ? pathname === n.to : pathname === n.to || pathname.startsWith(n.to + '/')));
+  const match = [...navItems, ...moreItems].find((n) => (('end' in n && n.end) ? pathname === n.to : pathname === n.to || pathname.startsWith(n.to + '/')));
   const title = titles[pathname] ?? (pathname.startsWith('/courses/') ? 'Course' : match?.label ?? 'Home');
   return (
     <header className="flex h-[60px] shrink-0 items-center justify-between border-b border-line bg-white px-4 lg:px-[26px]">

@@ -57,7 +57,7 @@ export default function Home() {
             {events.status === 'loading' && <div className="grid gap-[14px] sm:grid-cols-2 sm:grid-rows-2"><Skeleton className="h-40 sm:row-span-2 sm:h-full sm:min-h-[325px]" /><Skeleton className="h-40" /><Skeleton className="h-40" /></div>}
             {events.status === 'error' && <ErrorState message={events.message} onRetry={retryEvents} />}
             {events.status === 'ready' && (
-              events.data.length === 0 ? <p className="py-8 text-center text-sm text-muted">No events today.</p> : (
+              events.data.length === 0 ? <p className="py-8 text-center text-sm text-muted">No upcoming Club Days. Join a club to see its sessions here.</p> : (
                 <div className="grid gap-[14px] sm:grid-cols-2 sm:grid-rows-2">
                   {events.data.map((e, i) => <EventCard key={e.id} event={e} className={i === 0 ? 'sm:row-span-2 min-h-[160px]' : ''} />)}
                 </div>
@@ -83,6 +83,7 @@ export default function Home() {
           {attendance.status === 'error' && <ErrorState message={attendance.message} onRetry={retryAttendance} />}
           {attendance.status === 'ready' && (
             <>
+              {attendance.data.present + attendance.data.absent === 0 && <p className="mt-4 text-center text-sm text-muted">No attendance recorded yet.</p>}
               <div className="mt-5 flex justify-center"><Donut present={attendance.data.present} absent={attendance.data.absent} /></div>
               <ul className="mt-6 space-y-3 text-[16px] text-ink">
                 <li className="flex items-center justify-between"><span className="flex items-center gap-3"><i className="h-3 w-3 rounded-[3px] bg-success" />Present</span><span className="font-medium">{attendance.data.present}</span></li>

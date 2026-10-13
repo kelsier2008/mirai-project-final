@@ -21,15 +21,19 @@ function detailMessage(detail: unknown, status: number): string {
   return status === 403 ? 'You do not have permission to do that.' : `Something went wrong (error ${status}).`;
 }
 
-/** The only place that calls fetch. Components use the service functions in ./services. */
-export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function send(method: string, path: string, body?: unknown): Promise<Response> {
   const headers: Record<string, string> = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  let payload: BodyInit | undefined;
+  if (body instanceof FormData) payload = body;
+  else if (body !== undefined && body !== null) {
+    headers['Content-Type'] = 'application/json';
+    payload = JSON.stringify(body);
+  }
   let res: Response;
   try {
-    res = await fetch(API_BASE_URL + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    res = await fetch(API_BASE_URL + path, { method, headers, body: payload });
   } catch {
     throw new ApiError(`Cannot reach the server at ${API_BASE_URL}. Check your connection and try again.`, 0);
   }
@@ -41,5 +45,26 @@ export async function request<T>(method: string, path: string, body?: unknown): 
     const data = (await res.json().catch(() => ({}))) as { detail?: unknown };
     throw new ApiError(detailMessage(data.detail, res.status), res.status);
   }
-  return (await res.json()) as T;
+  return res;
+}
+
+/** The only place that calls fetch. Components use the service functions in ./services. */
+export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await send(method, path, body);
+  return (res.headers.get('content-type') || '').includes('json') ? ((await res.json()) as T) : (undefined as T);
+}
+
+/** Authenticated file fetch (PDFs, CSVs, uploads). */
+export async function requestBlob(path: string): Promise<Blob> {
+  return (await send('GET', path)).blob();
+}
+
+/** Saves an authenticated download under `filename`. */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const url = URL.createObjectURL(await requestBlob(path));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }

@@ -3,21 +3,11 @@
 // highlight banners. Replace each export with a real call in src/api/services.ts when the
 // backend adds them (see README "Swapping mock data for the real API").
 import type {
-  AcademicProfile, AttendanceSummary, Assignment, EventItem, Faq, FaqCategory, HighlightItem, Subject,
+  AcademicProfile, Assignment, Faq, FaqCategory, HighlightItem, Subject,
 } from '../api/types';
 
 // TODO(api): no program/batch/semester on GET /auth/me.
 export const mockAcademic: AcademicProfile = { program: 'BTECH', batch: '2026-30', semester: 'Semester 1' };
-
-// Used when GET /club-days?upcoming=true returns nothing or fails.
-export const mockEvents: EventItem[] = [
-  { id: 'e1', kind: 'Lecture', attendance: 'Present', start: '9:00 AM', end: '11:00 AM', title: 'Chemistry Lab Sem 1', category: 'Core', mode: 'Offline' },
-  { id: 'e2', kind: 'Lecture', attendance: 'Present', start: '11:00 AM', end: '12:00 PM', title: 'DSA', category: 'Core', mode: 'Offline' },
-  { id: 'e3', kind: 'Lecture', attendance: 'Present', start: '12:00 PM', end: '1:00 PM', title: 'English & Communication Skills', category: 'Core', mode: 'Offline' },
-];
-
-// Used when attendance cannot be derived from /checkin/attendance/me + /club-days.
-export const mockAttendance: AttendanceSummary = { present: 90, absent: 10 };
 
 // TODO(api): no highlights/banners endpoint. Placeholder art lives in src/assets.
 export const mockHighlights: HighlightItem[] = [

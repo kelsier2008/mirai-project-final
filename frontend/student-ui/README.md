@@ -1,7 +1,25 @@
 # Mirai student portal UI
 
-React + TypeScript + Vite + Tailwind v4 rebuild of the student portal screens (Home, Help & FAQs,
-My Subjects) on top of the existing Mirai API. The other four role portals are untouched.
+React + TypeScript + Vite + Tailwind v4 student portal in the new Mirai theme. It combines the
+redesigned screens (Home, Help & FAQs, My Subjects) with every page of the previous vanilla student
+portal (`frontend/apps/student`): clubs, Club Days, check-in, submissions, certificates, events,
+records and notifications, all on the existing Mirai API. The other four role portals are untouched.
+
+| Route | Page |
+|---|---|
+| `/` | Home |
+| `/calendar` | Club Days (was "Days") |
+| `/community` | Clubs and Events tabs |
+| `/attendance` | Check-in and attendance history |
+| `/submit` | Submissions |
+| `/certificates` | Certificates |
+| `/records` | My Record (transcript) |
+| `/notifications` | Inbox and email/WhatsApp preferences |
+| `/courses`, `/help` | My Subjects, Help & FAQs (mock data) |
+| `/fees`, `/academy`, `/courses/:id` | stubs |
+
+Log Out asks for confirmation. To test locally against this repo's backend see the root README
+(`./scripts/run_local.sh --demo`) and set `VITE_API_BASE_URL=http://localhost:8000` in `.env.local`.
 
 ```bash
 npm install
@@ -23,7 +41,7 @@ Copy `.env.example` to `.env.local` to override. No secrets, tokens or demo logi
 src/
   api/         client.ts (the only fetch), services.ts (typed calls), types.ts, config.ts
   components/  Sidebar, Topbar, AppShell, Card, Pill, Donut, Accordion, EventCard, SubjectCard, ...
-  pages/       Home, Help, Subjects, Login, Stub (route stubs + /courses/:id)
+  pages/       Home, Calendar, Community (+Events), Attendance, Submit, Certificates, Records, Notifications, Help, Subjects, Login, Stub
   data/        mock.ts, typed placeholder data
   styles/      tokens.css (@theme colors, radii, shadows), index.css
   lib/         auth context (token, role check, logout), useAsync (loading/error/ready)
@@ -35,7 +53,7 @@ skeleton, an error state with retry, and (where the API lacks the data) a mock f
 
 ## Swapping mock data for the real API
 
-Each mock-backed function in `src/api/services.ts` (`getSubjects`, `getAssignments`, `getFaqs`,
+Only the mock-backed functions in `src/api/services.ts` (`getSubjects`, `getAssignments`, `getFaqs`,
 `getHighlights`, `getAcademicProfile`) returns `{ data, source: 'mock' }`. Replace its body with
 `request<T>('GET', '/your/endpoint')`, map the response to the types in `src/api/types.ts`, and
 return `{ data, source: 'api' }`. Search for `TODO(api)` to find every placeholder. See

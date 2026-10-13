@@ -264,3 +264,17 @@ static site served the single-file frontend, which no longer exists. If that sit
 in your Render account, delete it in the Render dashboard; removing it from the Blueprint
 does not remove it. `scripts/build_public_frontend.py` was removed; its replacement is
 `frontend/scripts/build-portal.mjs`.
+
+
+## Student portal, new React UI
+
+`frontend/student-ui` is a React/Vite replacement for the student portal with the same API and
+auth flow (see its README and `docs/API_NOTES.md`). Deploy it as the Student project's output:
+
+```bash
+cd frontend/student-ui && VITE_API_BASE_URL=https://api.example.edu npm run build
+```
+
+Upload `frontend/student-ui/dist/` (it includes `_headers`). The API's CORS settings must include
+the Pages origin, exactly as for the other portals. `frontend/apps/student` stays in the repo until
+you retire it.

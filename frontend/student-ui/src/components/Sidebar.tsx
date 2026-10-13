@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom';
-import { BookOpen, CalendarDays, CircleHelp, House, LogOut, UserCheck, Users, WalletCards, type LucideIcon } from 'lucide-react';
+import { Award, Bell, BookOpen, CalendarDays, CircleHelp, FileCheck, House, LogOut, ScrollText, UserCheck, Users, WalletCards, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Logo } from './Logo';
 import { ConfirmDialog } from './ConfirmDialog';
 import { initials, useAuth } from '../lib/auth';
 import { useAsync } from '../lib/useAsync';
 import { getAcademicProfile } from '../api/services';
+import { useUnreadCount } from '../lib/unread';
 
 export const navItems: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: '/', label: 'Home', icon: House, end: true },
@@ -18,12 +19,21 @@ export const navItems: { to: string; label: string; icon: LucideIcon; end?: bool
   { to: '/help', label: 'Help & FAQs', icon: CircleHelp },
 ];
 
+// Club-tracker pages carried over from the previous student portal.
+export const moreItems: { to: string; label: string; icon: LucideIcon }[] = [
+  { to: '/submit', label: 'Submissions', icon: FileCheck },
+  { to: '/certificates', label: 'Certificates', icon: Award },
+  { to: '/records', label: 'My Record', icon: ScrollText },
+  { to: '/notifications', label: 'Notifications', icon: Bell },
+];
+
 const row = 'on-dark flex h-10 items-center gap-3 rounded-[10px] px-3 text-[15px] font-medium transition-colors duration-150 w-full';
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user, signOut } = useAuth();
   const [confirming, setConfirming] = useState(false);
   const [academic] = useAsync(getAcademicProfile);
+  const unread = useUnreadCount();
   const program = academic.status === 'ready' ? academic.data.program : '';
   return (
     <div className="flex h-full flex-col text-white" style={{ background: 'var(--sidebar-gradient)' }}>
@@ -40,6 +50,15 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
               >
                 <Icon size={20} strokeWidth={1.5} />
                 {label}
+              </NavLink>
+            </li>
+          ))}
+          {moreItems.map(({ to, label, icon: Icon }) => (
+            <li key={to}>
+              <NavLink to={to} onClick={onNavigate} className={({ isActive }) => `${row} ${isActive ? 'bg-white text-primary' : 'text-white/90 hover:bg-white/10'}`}>
+                <Icon size={20} strokeWidth={1.5} />
+                <span className="flex-1">{label}</span>
+                {to === '/notifications' && unread > 0 && <span className="rounded-full bg-white px-1.5 text-[11px] font-bold text-primary" aria-label={`${unread} unread`}>{unread > 9 ? '9+' : unread}</span>}
               </NavLink>
             </li>
           ))}

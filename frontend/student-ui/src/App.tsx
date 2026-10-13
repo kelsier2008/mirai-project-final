@@ -6,6 +6,13 @@ import Help from './pages/Help';
 import Login from './pages/Login';
 import Subjects from './pages/Subjects';
 import { CourseStub, Stub } from './pages/Stub';
+import Attendance from './pages/Attendance';
+import Calendar from './pages/Calendar';
+import Certificates from './pages/Certificates';
+import Community from './pages/Community';
+import Notifications from './pages/Notifications';
+import Records from './pages/Records';
+import Submit from './pages/Submit';
 
 export default function App() {
   const { status } = useAuth();
@@ -15,9 +22,13 @@ export default function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<Home />} />
-        <Route path="calendar" element={<Stub title="Calendar" />} />
-        <Route path="community" element={<Stub title="Community" />} />
-        <Route path="attendance" element={<Stub title="My Attendance" />} />
+        <Route path="calendar" element={<Calendar />} />
+        <Route path="community" element={<Community />} />
+        <Route path="attendance" element={<Attendance />} />
+        <Route path="submit" element={<Submit />} />
+        <Route path="certificates" element={<Certificates />} />
+        <Route path="records" element={<Records />} />
+        <Route path="notifications" element={<Notifications />} />
         <Route path="fees" element={<Stub title="Fee Payment" />} />
         <Route path="courses" element={<Subjects />} />
         <Route path="courses/:id" element={<CourseStub />} />

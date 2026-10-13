@@ -46,15 +46,29 @@ Profile (`/auth/me`, `login.user`): `{id, role, campus_id, name, email, student_
 
 ## Data feeding each screen of this UI
 
-| Screen / card | Source | Notes |
-|---|---|---|
-| Sidebar user block, "Hello, <name>" | **API** `GET /auth/me` | initials from `name` |
-| Program / batch / semester ("BTECH · 2026-30", "Semester 1") | **mock** | API has no program/semester; `getAcademicProfile` |
-| Home → Events | **API** `/club-days?upcoming=true` + `/checkin/attendance/me` | Club Days mapped to event cards (first 3); mock if empty/failed. Tag "Lecture" becomes "Club Day" for real data |
-| Home → Attendance donut | **API (derived)** | present = past Club Days with a check-in; absent = past Club Days without one; mock 90/10 when there is no history |
-| Home → Highlights | **mock** | placeholder SVG banners |
-| Help & FAQs | **mock** | no FAQ endpoint; placeholder answers |
-| My Subjects, Pending assignments | **mock** | the backend is a club tracker: no subjects or assignments exist |
-| Calendar, Community, My Attendance, Fee Payment, Mirai Academy | stubs | no data |
+All club-tracker screens call the real API through `src/api/services.ts`. Only the screens the
+backend has no data for use mock data (marked `TODO(api)` in `src/data/mock.ts`).
 
-Mock fallbacks live in `src/data/mock.ts` and `src/api/services.ts`, each marked `TODO(api)`.
+| Route | Screen | Source |
+|---|---|---|
+| sidebar, "Hello, <name>" | profile | **API** `GET /auth/me` |
+| program / batch / semester | academic profile | **mock** (no field on `/auth/me`) |
+| `/` Home, Events card | upcoming Club Days | **API** `/club-days?upcoming=true` + `/checkin/attendance/me` (empty state when none) |
+| `/` Home, Attendance donut | present vs absent | **API (derived)** from past Club Days and check-ins |
+| `/` Home, Highlights | banners | **mock** placeholder art |
+| `/calendar` | Club Days table | **API** `GET /club-days` |
+| `/community` Clubs tab | join clubs, memberships | **API** `GET /clubs`, `GET /memberships/me`, `POST /clubs/{id}/join` |
+| `/community?tab=events` | events, teams, results, gallery | **API** `/events/**` |
+| `/attendance` | check-in + history | **API** `/checkin/sessions/{id}`, `POST /checkin/scan`, `/checkin/attendance/me` |
+| `/submit` | submissions | **API** `/club-days/{id}/submissions[/file\|/link]`, `/submissions/{id}/download` |
+| `/certificates` | claim and download | **API** `/certificates/me`, `POST /certificates/participation`, `/certificates/{id}/download` |
+| `/records` | transcript + verify | **API** `/transcripts/me[.csv\|/download]`, `POST /api/transcripts/verify` |
+| `/notifications` | inbox, email and WhatsApp prefs | **API** `/notifications/**` |
+| `/courses` My Subjects, pending assignments | subjects | **mock** (backend has no subjects or assignments) |
+| `/help` Help & FAQs | FAQs | **mock** |
+| `/fees`, `/academy`, `/courses/:id` | stubs | none |
+
+Verified on 2026-10-13 against this repo's backend (Docker, seeded demo data): sign-in, every route
+above loading without console errors, and joining a club. Flows needing staff-created data
+(check-in scan, submissions, certificates, event registration) are implemented from the same
+contracts as the old portal but have not been exercised end to end.

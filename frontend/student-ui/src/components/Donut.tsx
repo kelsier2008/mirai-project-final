@@ -12,7 +12,7 @@ export function Donut({ present, absent, size = 165 }: Props) {
   return (
     <div className="relative" style={{ width: size, height: size }} role="img" aria-label={`${pct}% present`}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--color-success)" strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={total === 0 ? "var(--color-line)" : "var(--color-success)"} strokeWidth={stroke} />
         {redLen > 0 && (
           <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--color-danger-bar)" strokeWidth={stroke}
             strokeLinecap="round" strokeDasharray={`${Math.max(redLen - gap, 1)} ${c}`} transform={`rotate(${(present / total) * 360} ${size / 2} ${size / 2})`} />
